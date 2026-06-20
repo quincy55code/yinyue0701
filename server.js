@@ -63,6 +63,21 @@ app.use((_req, res, next) => {
 // 提供静态文件（index.html, css, js）
 app.use(express.static(__dirname));
 
+// ========== Auth 中间件 ==========
+async function authMiddleware(req, res, next) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: '请先登录' });
+    }
+    const token = authHeader.slice(7);
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) {
+        return res.status(401).json({ error: '登录已过期，请重新登录' });
+    }
+    req.user = { id: user.id, email: user.email };
+    next();
+}
+
 // ========== 工具函数：格式化歌曲数据 ==========
 function formatSong(s) {
     if (!s) return null;
