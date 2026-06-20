@@ -53,7 +53,7 @@ const PORT = 8765;
 app.use((_req, res, next) => {
     res.set({
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': '*',
     });
     if (_req.method === 'OPTIONS') return res.sendStatus(200);
@@ -484,6 +484,94 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
     } catch (err) {
         console.error('[me]', err.message);
         res.status(500).json({ error: '获取用户信息失败' });
+    }
+});
+
+// ========== 收藏端点 ==========
+
+/** GET /api/favorites — 获取用户收藏列表（含歌曲详情） */
+app.get('/api/favorites', authMiddleware, async (req, res) => {
+    try {
+        const { data, error } = await supabaseAdmin
+            .from('favorites')
+            .select('song_id, created_at, songs(id, title, singer, bvid, page, start_seconds, end_seconds, duration_seconds, cover_url, bilibili_url)')
+            .eq('user_id', req.user.id)
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error('[favorites]', error.message);
+            return res.status(500).json({ error: '获取收藏列表失败' });
+        }
+
+        // 展平结果: 从 { song_id, songs: {...} } 提取为歌曲数组
+        const songs = (data || [])
+            .map(row => row.songs)
+            .filter(Boolean)
+            .map(formatSong)
+            .filter(Boolean);
+
+        res.json(songs);
+    } catch (err) {
+        console.error('[favorites]', err.message);
+        res.status(500).json({ error: '获取收藏列表失败' });
+    }
+});
+
+/** POST /api/favorites/:songId — 添加收藏 */
+app.post('/api/favorites/:songId', authMiddleware, async (req, res) => {
+    const songId = parseInt(req.params.songId);
+    if (!songId || songId < 1) {
+        return res.status(400).json({ error: '无效的歌曲 ID' });
+    }
+
+    try {
+        // 检查歌曲是否存在
+        const { data: song } = await supabaseAdmin
+            .from('songs')
+            .select('id')
+            .eq('id', songId)
+            .single();
+
+        if (!song) {
+            return res.status(404).json({ error: '歌曲不存在' });
+        }
+
+        const { error } = await supabaseAdmin
+            .from('favorites')
+            .upsert({ user_id: req.user.id, song_id: songId }, { onConflict: 'user_id,song_id' });
+
+        if (error) {
+            console.error('[favorites add]', error.message);
+            return res.status(500).json({ error: '收藏失败' });
+        }
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[favorites add]', err.message);
+        res.status(500).json({ error: '收藏失败' });
+    }
+});
+
+/** DELETE /api/favorites/:songId — 取消收藏 */
+app.delete('/api/favorites/:songId', authMiddleware, async (req, res) => {
+    const songId = parseInt(req.params.songId);
+
+    try {
+        const { error } = await supabaseAdmin
+            .from('favorites')
+            .delete()
+            .eq('user_id', req.user.id)
+            .eq('song_id', songId);
+
+        if (error) {
+            console.error('[favorites remove]', error.message);
+            return res.status(500).json({ error: '取消收藏失败' });
+        }
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[favorites remove]', err.message);
+        res.status(500).json({ error: '取消收藏失败' });
     }
 });
 
