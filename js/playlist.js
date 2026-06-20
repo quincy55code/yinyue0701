@@ -88,14 +88,22 @@ const PlaylistStore = (() => {
         }
     }
 
+    let _toggleLock = false;
+
     async function toggleFavorite(songId) {
         if (!isLoggedIn()) return false;
-        if (isFavorite(songId)) {
-            await removeFavorite(songId);
-            return false;
-        } else {
-            await addFavorite(songId);
-            return true;
+        if (_toggleLock) return isFavorite(songId);
+        _toggleLock = true;
+        try {
+            if (isFavorite(songId)) {
+                await removeFavorite(songId);
+                return false;
+            } else {
+                await addFavorite(songId);
+                return true;
+            }
+        } finally {
+            _toggleLock = false;
         }
     }
 

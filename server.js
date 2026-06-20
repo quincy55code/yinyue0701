@@ -452,13 +452,8 @@ app.post('/api/auth/login', async (req, res) => {
 
 /** POST /api/auth/logout — 登出 */
 app.post('/api/auth/logout', authMiddleware, async (req, res) => {
-    try {
-        await supabase.auth.signOut();
-        // signOut 在服务端效果有限；前端清除本地 session 即可
-        res.json({ ok: true });
-    } catch (err) {
-        res.json({ ok: true }); // 登出总是成功
-    }
+    // JWT 是无状态的，真正的"登出"由前端清除 localStorage 完成
+    res.json({ ok: true });
 });
 
 /** GET /api/auth/me — 获取当前用户信息 */
