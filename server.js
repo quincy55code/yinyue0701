@@ -1,18 +1,52 @@
 /**
  * 音乐播放器 — Node.js 后端
- * 代理 B站 DASH 音频流，前端无需直接面对跨域和防盗链问题
+ * 代理 B站 DASH 音频流 + Supabase 数据查询
  */
 
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+
+// ========== 手动加载 .env（不依赖 dotenv 包） ==========
+(function loadEnv() {
+    const envPath = path.join(__dirname, '.env');
+    if (!fs.existsSync(envPath)) {
+        console.warn('[env] .env 文件不存在，使用系统环境变量');
+        return;
+    }
+    const content = fs.readFileSync(envPath, 'utf-8');
+    content.split('\n').forEach(line => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) return;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx === -1) return;
+        const key = trimmed.slice(0, eqIdx).trim();
+        const value = trimmed.slice(eqIdx + 1).trim();
+        if (key && value) process.env[key] = value;
+    });
+})();
+
+const { createClient } = require('@supabase/supabase-js');
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    console.error('[init] 缺少 SUPABASE_URL 或 SUPABASE_ANON_KEY，请检查 .env 文件');
+    process.exit(1);
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const app = express();
+app.use(express.json());   // 解析 POST JSON body
 const PORT = 8765;
 
 // CORS — 允许前端跨域访问
 app.use((_req, res, next) => {
     res.set({
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': '*',
     });
     if (_req.method === 'OPTIONS') return res.sendStatus(200);
@@ -22,45 +56,30 @@ app.use((_req, res, next) => {
 // 提供静态文件（index.html, css, js）
 app.use(express.static(__dirname));
 
-// ========== 歌曲配置 ==========
-const SONGS = [
-    {
-        id: 1,
-        title: "离别开出花",
-        bvid: "BV1pY5q6jECZ",
-        page: 1,
-        start_time: 45 * 60 + 48,   // 45:48
-        end_time: 49 * 60 + 47,     // 49:47
-        page_duration: 3199,        // B站视频总时长（秒）
-    },
-    {
-        id: 2,
-        title: "小幸运",
-        bvid: "BV1pr6aYiE97",
-        page: 2,
-        start_time: null,
-        end_time: null,
-        page_duration: 266,         // B站页面时长 4:26
-    },
-    {
-        id: 3,
-        title: "匆匆那年",
-        bvid: "BV1pr6aYiE97",
-        page: 7,
-        start_time: null,
-        end_time: null,
-        page_duration: 242,         // B站页面时长 4:02
-    },
-    {
-        id: 4,
-        title: "虞兮叹",
-        bvid: "BV1dp4y1A7c3",
-        page: 1,
-        start_time: null,
-        end_time: null,
-        page_duration: 211,         // B站页面时长 3:31
-    },
-];
+// ========== 工具函数：格式化歌曲数据 ==========
+function formatSong(s) {
+    if (!s) return null;
+    const hasSegment = s.start_seconds != null && s.end_seconds != null;
+    return {
+        id: s.id,
+        title: s.title || '未知歌曲',
+        singer: s.singer || '',
+        bvid: s.bvid,
+        page: s.page,
+        start_time: hasSegment ? s.start_seconds : null,
+        end_time: hasSegment ? s.end_seconds : null,
+        page_duration: s.duration_seconds || null,
+        cover_url: s.cover_url || null,
+        duration: hasSegment
+            ? (s.end_seconds - s.start_seconds)
+            : (s.duration_seconds || null),
+    };
+}
+
+// ========== 原硬编码歌曲（备份） ==========
+// const SONGS = [
+//     { id: 1, title: "离别开出花", bvid: "BV1pY5q6jECZ", page: 1, ... },
+// ];
 
 // B站 API 请求头
 const BILI_HEADERS = {
@@ -70,23 +89,101 @@ const BILI_HEADERS = {
 
 // ========== API 端点 ==========
 
-/** GET /api/songs — 返回歌曲列表 */
-app.get('/api/songs', (_req, res) => {
-    res.json(SONGS.map(s => ({
-        id: s.id,
-        title: s.title,
-        start_time: s.start_time,
-        end_time: s.end_time,
-        page_duration: s.page_duration || null,
-        duration: (s.start_time && s.end_time) ? (s.end_time - s.start_time) : (s.page_duration || null),
-    })));
+/** GET /api/songs — 从 Supabase 查询前 10 首歌曲 */
+app.get('/api/songs', async (_req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('songs')
+            .select('id,title,singer,bvid,page,start_seconds,end_seconds,duration_seconds,cover_url,bilibili_url')
+            .order('id', { ascending: true })
+            .limit(10);
+
+        if (error) {
+            console.error('[songs] Supabase error:', error.message);
+            return res.status(500).json({ error: '获取歌曲列表失败' });
+        }
+
+        res.json((data || []).map(formatSong).filter(Boolean));
+    } catch (err) {
+        console.error('[songs]', err.message);
+        res.status(500).json({ error: '获取歌曲列表失败' });
+    }
+});
+
+/** GET /api/search?q=关键词 — 模糊搜索歌名 + 歌手 */
+app.get('/api/search', async (req, res) => {
+    const q = (req.query.q || '').trim();
+    if (!q || q.length > 100) {
+        return res.json({ results: [], query: q });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('songs')
+            .select('id,title,singer,bvid,page,start_seconds,end_seconds,duration_seconds,cover_url,bilibili_url')
+            .or(`title.ilike.%${q}%,singer.ilike.%${q}%`)
+            .order('id', { ascending: true })
+            .limit(20);
+
+        if (error) {
+            console.error('[search] Supabase error:', error.message);
+            return res.status(500).json({ error: '搜索失败' });
+        }
+
+        res.json({
+            results: (data || []).map(formatSong).filter(Boolean),
+            query: q,
+        });
+    } catch (err) {
+        console.error('[search]', err.message);
+        res.status(500).json({ error: '搜索失败' });
+    }
+});
+
+/** POST /api/search-log — 记录未找到的搜索词 */
+app.post('/api/search-log', async (req, res) => {
+    const query = (req.body.query || '').trim();
+    if (!query) {
+        return res.status(400).json({ error: 'query is required' });
+    }
+
+    try {
+        const { error } = await supabase
+            .from('search_logs')
+            .insert({ query, searched_at: new Date().toISOString() });
+
+        if (error) {
+            console.error('[search-log] Supabase error:', error.message);
+            return res.status(500).json({ error: '记录失败' });
+        }
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[search-log]', err.message);
+        res.status(500).json({ error: '记录失败' });
+    }
 });
 
 /** GET /api/stream/:songId — 代理 B站 DASH 音频流 */
 app.get('/api/stream/:songId', async (req, res) => {
     const songId = parseInt(req.params.songId);
-    const song = SONGS.find(s => s.id === songId);
-    if (!song) return res.status(404).json({ error: 'Song not found' });
+
+    // 从 Supabase 查询歌曲元数据
+    let song;
+    try {
+        const { data, error } = await supabase
+            .from('songs')
+            .select('*')
+            .eq('id', songId)
+            .single();
+
+        if (error || !data) {
+            return res.status(404).json({ error: 'Song not found' });
+        }
+        song = data;
+    } catch (err) {
+        return res.status(500).json({ error: '查询歌曲失败' });
+    }
 
     try {
         // 1. 获取视频信息 → 拿 cid
@@ -99,7 +196,7 @@ app.get('/api/stream/:songId', async (req, res) => {
         }
 
         const pages = viewData.data.pages || [];
-        const pageIdx = song.page - 1;
+        const pageIdx = (song.page || 1) - 1;
         if (pageIdx >= pages.length) {
             return res.status(400).json({ error: '分P不存在' });
         }
@@ -129,10 +226,10 @@ app.get('/api/stream/:songId', async (req, res) => {
         }
 
         // 3. 流式转发 — 转发浏览器的 Range 请求头
-        const browserRange = req.headers.range;                      // 浏览器 seek 时发来的 Range
+        const browserRange = req.headers.range;
         const upstreamHeaders = { ...BILI_HEADERS };
         if (browserRange) {
-            upstreamHeaders["Range"] = browserRange;                 // 转发 Range 给 B站 CDN
+            upstreamHeaders["Range"] = browserRange;
         }
 
         const upstreamResp = await fetch(audioUrl, {
@@ -146,7 +243,6 @@ app.get('/api/stream/:songId', async (req, res) => {
         const isPartial = upstreamResp.status === 206;
         const upstreamContentLength = upstreamResp.headers.get('content-length');
 
-        // 基础响应头
         const baseHeaders = {
             'Content-Type': 'audio/mp4',
             'Accept-Ranges': 'bytes',
@@ -154,18 +250,15 @@ app.get('/api/stream/:songId', async (req, res) => {
         };
 
         if (isPartial) {
-            // B站 CDN 支持 Range → 返回 206 Partial Content
             res.status(206);
             const contentRange = upstreamResp.headers.get('content-range');
             if (contentRange) baseHeaders['Content-Range'] = contentRange;
             if (upstreamContentLength) baseHeaders['Content-Length'] = upstreamContentLength;
             res.set(baseHeaders);
         } else if (upstreamContentLength) {
-            // 全文件 + 有 Content-Length → 转发并流式传输（浏览器可以 seek）
             baseHeaders['Content-Length'] = upstreamContentLength;
             res.set(baseHeaders);
         } else {
-            // 全文件但没有 Content-Length → 先下载到内存，再返回（确保浏览器能 seek）
             console.log(`[stream] songId=${songId}: 上游无 Content-Length，缓冲完整文件...`);
             const buffer = Buffer.from(await upstreamResp.arrayBuffer());
             baseHeaders['Content-Length'] = buffer.length;
@@ -174,7 +267,6 @@ app.get('/api/stream/:songId', async (req, res) => {
             return;
         }
 
-        // 管道转发（仅当上游有 Content-Length 或为 206 时走这里）
         const reader = upstreamResp.body.getReader();
 
         req.on('close', () => {
@@ -203,5 +295,6 @@ app.get('/api/stream/:songId', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`🎵 音乐播放器后端已启动 → http://localhost:${PORT}`);
     console.log(`   歌曲列表: http://localhost:${PORT}/api/songs`);
+    console.log(`   搜索接口: http://localhost:${PORT}/api/search?q=离别`);
     console.log(`   前端页面: http://localhost:${PORT}`);
 });
