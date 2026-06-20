@@ -34,12 +34,7 @@ const Auth = (() => {
         return _session ? _session.access_token : null;
     }
 
-    function authHeaders() {
-        const token = getToken();
-        return token ? { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
-    }
-
-    // 仅导出 headers 对象构建方法（供 PlaylistStore 使用）
+    // 供 PlaylistStore 使用的 headers 构建方法
     function getAuthHeaders() {
         const token = getToken();
         if (!token) return { 'Content-Type': 'application/json' };
@@ -48,8 +43,6 @@ const Auth = (() => {
             'Content-Type': 'application/json',
         };
     }
-    // 挂在 Auth 上供外部使用
-    Auth.getAuthHeaders = getAuthHeaders;
 
     /** 保存会话到 localStorage */
     function saveSession(session, user) {
