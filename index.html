@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎵 青春旋律 — 音乐播放器</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎵</text></svg>">
+</head>
+<body>
+
+    <!-- ====== 顶部标题栏 ====== -->
+    <header class="app-header">
+        <div class="app-logo">
+            <div class="icon">🎵</div>
+            <h1>青春旋律</h1>
+        </div>
+        <div style="font-size:13px;color:var(--text-muted)">那些年，我们一起听的歌</div>
+    </header>
+
+    <!-- ====== 主内容区 ====== -->
+    <main class="app-main">
+        <!-- 左侧：歌曲列表 -->
+        <section class="song-list-panel">
+            <div class="section-header">🎶 歌曲列表</div>
+            <div class="song-list" id="songList">
+                <!-- 动态渲染 -->
+            </div>
+        </section>
+
+        <!-- 右侧面板 -->
+        <aside class="right-panel">
+            <div class="panel-tabs">
+                <button class="panel-tab active" id="tabFav">⭐ 收藏</button>
+                <button class="panel-tab" id="tabPl">📋 歌单</button>
+            </div>
+            <div class="panel-content" id="panelContent">
+                <div id="panelFav"><!-- 收藏列表 --></div>
+                <div id="panelPl" style="display:none"><!-- 歌单列表 --></div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- ====== 底部播放栏 ====== -->
+    <footer class="player-bar" id="playerBar">
+        <!-- 进度条 -->
+        <div class="progress-row">
+            <span class="progress-time" id="timeCurrent">0:00</span>
+            <div class="progress-bar-wrap" id="progressWrap">
+                <div class="progress-bar-fill" id="progressFill"></div>
+            </div>
+            <span class="progress-time" id="timeTotal">0:00</span>
+        </div>
+
+        <!-- 控件 -->
+        <div class="controls-row" style="position:relative">
+            <!-- 当前播放信息 -->
+            <div class="player-info">
+                <span class="now-playing-label">
+                    <span class="dot" id="nowPlayingDot" style="display:none"></span>
+                </span>
+                <span class="now-playing-title" id="nowPlayingTitle">未在播放</span>
+            </div>
+
+            <button class="btn-mode btn-ctrl loop-all" id="btnMode" title="列表循环">🔁</button>
+            <button class="btn-ctrl" id="btnPrev" title="上一首">⏮</button>
+            <button class="btn-ctrl play-btn" id="btnPlay" title="播放/暂停">▶</button>
+            <button class="btn-ctrl" id="btnNext" title="下一首">⏭</button>
+            <div style="width:36px"></div> <!-- 占位保持居中 -->
+        </div>
+    </footer>
+
+    <!-- ====== Modal ====== -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal-box">
+            <div class="modal-title" id="modalTitle"></div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-actions" id="modalActions"></div>
+        </div>
+    </div>
+
+    <!-- ====== Scripts ====== -->
+    <script src="js/playlist.js"></script>
+    <script src="js/player.js"></script>
+    <script src="js/ui.js"></script>
+    <script>
+        // 启动应用
+        (async function bootstrap() {
+            try {
+                const resp = await fetch('/api/songs');
+                if (!resp.ok) throw new Error('无法获取歌曲列表');
+                const songs = await resp.json();
+                UI.init(songs);
+            } catch (err) {
+                console.error('启动失败:', err);
+                document.getElementById('songList').innerHTML = `
+                    <div class="empty-state" style="padding:60px 20px">
+                        <span class="empty-icon">⚠️</span>
+                        无法连接后端服务<br>
+                        <small>请确保已启动后端服务 (node server.js)</small>
+                    </div>`;
+            }
+        })();
+    </script>
+
+</body>
+</html>

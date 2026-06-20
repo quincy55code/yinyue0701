@@ -1,0 +1,7 @@
+# Node.js 版本（当前使用）
+# 启动: node server.js
+# 依赖: npm install
+
+# Python 版本（可选，保留备用）
+# 启动: python app.py
+# 依赖: pip install fastapi httpx uvicorn
