@@ -87,6 +87,10 @@ const BILI_HEADERS = {
     "Referer": "https://www.bilibili.com/",
 };
 
+// cid 缓存：bvid:page → cid（cid 对于给定 bvid+page 是静态的，缓存可跳过一次 B站 API 调用）
+const cidCache = new Map();
+function cacheKey(bvid, page) { return `${bvid}:${page || 1}`; }
+
 // ========== API 端点 ==========
 
 /** GET /api/songs — 从 Supabase 查询前 10 首歌曲 */
@@ -140,7 +144,7 @@ app.get('/api/search', async (req, res) => {
     }
 });
 
-/** POST /api/search-log — 记录未找到的搜索词 */
+/** POST /api/search-log — 记录未找到的搜索词（5 分钟内去重） */
 app.post('/api/search-log', async (req, res) => {
     const query = (req.body.query || '').trim();
     if (!query) {
@@ -148,6 +152,19 @@ app.post('/api/search-log', async (req, res) => {
     }
 
     try {
+        // 检查 5 分钟内是否已有相同查询，避免重复记录
+        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const { data: existing } = await supabase
+            .from('search_logs')
+            .select('id')
+            .eq('query', query)
+            .gte('searched_at', fiveMinAgo)
+            .limit(1);
+
+        if (existing && existing.length > 0) {
+            return res.json({ ok: true, deduped: true });
+        }
+
         const { error } = await supabase
             .from('search_logs')
             .insert({ query, searched_at: new Date().toISOString() });
@@ -186,21 +203,27 @@ app.get('/api/stream/:songId', async (req, res) => {
     }
 
     try {
-        // 1. 获取视频信息 → 拿 cid
-        const viewUrl = `https://api.bilibili.com/x/web-interface/view?bvid=${song.bvid}`;
-        const viewResp = await fetch(viewUrl, { headers: BILI_HEADERS });
-        const viewData = await viewResp.json();
+        // 1. 获取 cid（优先从缓存读取，减少一次 B站 API 调用）
+        const key = cacheKey(song.bvid, song.page);
+        let cid = cidCache.get(key);
 
-        if (viewData.code !== 0) {
-            return res.status(502).json({ error: `B站视频信息获取失败: ${viewData.message}` });
-        }
+        if (!cid) {
+            const viewUrl = `https://api.bilibili.com/x/web-interface/view?bvid=${song.bvid}`;
+            const viewResp = await fetch(viewUrl, { headers: BILI_HEADERS });
+            const viewData = await viewResp.json();
 
-        const pages = viewData.data.pages || [];
-        const pageIdx = (song.page || 1) - 1;
-        if (pageIdx >= pages.length) {
-            return res.status(400).json({ error: '分P不存在' });
+            if (viewData.code !== 0) {
+                return res.status(502).json({ error: `B站视频信息获取失败: ${viewData.message}` });
+            }
+
+            const pages = viewData.data.pages || [];
+            const pageIdx = (song.page || 1) - 1;
+            if (pageIdx >= pages.length) {
+                return res.status(400).json({ error: '分P不存在' });
+            }
+            cid = pages[pageIdx].cid;
+            cidCache.set(key, cid);  // 缓存 cid（静态值，不会过期）
         }
-        const cid = pages[pageIdx].cid;
 
         // 2. 获取播放地址（DASH 格式）
         const playUrl = `https://api.bilibili.com/x/player/playurl?bvid=${song.bvid}&cid=${cid}&fnval=16&fnver=0&fourk=1`;

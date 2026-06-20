@@ -50,6 +50,20 @@ const UI = (() => {
         return t.content.firstChild;
     }
 
+    /** 将歌曲合并到全局缓存（用于收藏/歌单面板查找） */
+    function mergeToCache(songs) {
+        if (!window._songCache) window._songCache = [];
+        const cache = window._songCache;
+        songs.forEach(song => {
+            const idx = cache.findIndex(s => String(s.id) === String(song.id));
+            if (idx >= 0) {
+                cache[idx] = song;  // 更新已有条目
+            } else {
+                cache.push(song);   // 添加新条目
+            }
+        });
+    }
+
     // ========== 渲染歌曲列表 ==========
 
     function renderSongList(songs) {
@@ -256,12 +270,25 @@ const UI = (() => {
         showModal(
             '新建歌单',
             '<input class="modal-input" id="inputPlName" placeholder="输入歌单名称…" maxlength="30">',
-            `<button class="btn btn-secondary" id="btnModalCancel">取消</button>
-             <button class="btn btn-primary" id="btnModalConfirm">创建</button>`
+            `<button class="btn btn-secondary" data-action="cancel" id="btnModalCancel">取消</button>
+             <button class="btn btn-primary" data-action="confirm" id="btnModalConfirm">创建</button>`
         );
         setTimeout(() => {
             const inp = document.getElementById('inputPlName');
-            if (inp) inp.focus();
+            if (inp) {
+                inp.focus();
+                inp.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        const created = PlaylistStore.createPlaylist(inp.value.trim());
+                        if (created) {
+                            hideModal();
+                            refreshAll();
+                        } else {
+                            alert('歌单名重复或无效');
+                        }
+                    }
+                });
+            }
         }, 100);
     }
 
@@ -271,7 +298,7 @@ const UI = (() => {
             showModal(
                 '添加到歌单',
                 '<div class="empty-state"><span class="empty-icon">📋</span>还没有歌单<br>请先在右侧面板新建歌单</div>',
-                '<button class="btn btn-secondary" id="btnModalCancel">关闭</button>'
+                '<button class="btn btn-secondary" data-action="cancel">关闭</button>'
             );
             return;
         }
@@ -284,7 +311,7 @@ const UI = (() => {
                     <div style="font-size:12px;color:var(--text-muted)">${already ? '✓ 已添加' : '点击添加'}</div>
                 </div>`;
             }).join(''),
-            '<button class="btn btn-secondary" id="btnModalCancel">关闭</button>'
+            '<button class="btn btn-secondary" data-action="cancel">关闭</button>'
         );
     }
 
@@ -292,34 +319,99 @@ const UI = (() => {
     let _searchTimer = null;
     let _isSearching = false;        // 当前是否在搜索模式
     let _defaultSongs = [];          // 默认歌曲缓存（搜索清空后恢复）
+    let _lastSearchResults = [];     // 最近一次搜索结果（用于面板刷新时保持显示）
 
     function setupSearch() {
         const input = els.searchInput;
         const clearBtn = els.searchClear;
         if (!input) return;
 
+        // 创建搜索历史下拉
+        const dropdown = document.createElement('div');
+        dropdown.className = 'search-history-dropdown';
+        dropdown.style.display = 'none';
+        input.parentNode.appendChild(dropdown);
+
+        function renderHistoryDropdown() {
+            const history = PlaylistStore.getSearchHistory();
+            if (history.length === 0) {
+                dropdown.style.display = 'none';
+                return;
+            }
+            dropdown.innerHTML = `
+                <div class="shd-header">
+                    <span>🕐 最近搜索</span>
+                    <button class="shd-clear" id="btnClearHistory">清除</button>
+                </div>
+                ${history.map(h => `
+                    <div class="shd-item" data-query="${escapeHtml(h)}">
+                        <span class="shd-query">${escapeHtml(h)}</span>
+                    </div>
+                `).join('')}
+            `;
+            dropdown.style.display = 'block';
+        }
+
+        function hideHistoryDropdown() {
+            setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+        }
+
+        // 下拉点击事件
+        dropdown.addEventListener('mousedown', (e) => {
+            e.preventDefault(); // 阻止 input 失焦
+            const item = e.target.closest('.shd-item');
+            const clearBtn2 = e.target.closest('#btnClearHistory');
+            if (item) {
+                const q = item.dataset.query;
+                input.value = q;
+                clearBtn.style.display = 'flex';
+                doSearch(q, { logMiss: true });
+                dropdown.style.display = 'none';
+            } else if (clearBtn2) {
+                PlaylistStore.clearSearchHistory();
+                dropdown.style.display = 'none';
+            }
+        });
+
+        // 聚焦时显示历史
+        input.addEventListener('focus', () => {
+            if (!input.value.trim()) {
+                renderHistoryDropdown();
+            }
+        });
+
+        // 失焦时隐藏
+        input.addEventListener('blur', () => {
+            hideHistoryDropdown();
+        });
+
         // 输入 → 防抖搜索
         input.addEventListener('input', () => {
             const q = input.value.trim();
             clearBtn.style.display = q ? 'flex' : 'none';
 
+            if (q) {
+                dropdown.style.display = 'none'; // 有输入时隐藏历史
+            }
+
             clearTimeout(_searchTimer);
             if (!q) {
                 // 清空搜索框 → 恢复默认列表
                 _isSearching = false;
+                _lastSearchResults = [];
                 renderSongList(_defaultSongs);
                 return;
             }
 
-            _searchTimer = setTimeout(() => doSearch(q), 300);
+            _searchTimer = setTimeout(() => doSearch(q), 300);  // 实时搜索，不记录缺失
         });
 
-        // 回车立即搜索
+        // 回车立即搜索（主动搜索 → 记录缺失）
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 clearTimeout(_searchTimer);
                 const q = input.value.trim();
-                if (q) doSearch(q);
+                if (q) doSearch(q, { logMiss: true });
             }
         });
 
@@ -333,24 +425,31 @@ const UI = (() => {
         });
     }
 
-    async function doSearch(q) {
+    async function doSearch(q, { logMiss = false } = {}) {
         if (!q || q.length > 100) return;
+
+        _isSearching = true;
+
+        // 保存搜索历史（notify → refreshAll 会因 _isSearching 保持搜索状态）
+        PlaylistStore.addSearchHistory(q);
 
         try {
             const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
             if (!resp.ok) return;
             const data = await resp.json();
 
-            _isSearching = true;
-
             if (data.results && data.results.length > 0) {
-                // 有结果 → 渲染搜索结果
+                // 有结果 → 合并到 _songCache（收藏面板需要），然后渲染
+                mergeToCache(data.results);
+                _lastSearchResults = data.results;
                 renderSongList(data.results);
             } else {
-                // 无结果 → 显示空状态 + 记录搜索
+                // 无结果 → 显示空状态，仅在主动搜索（Enter/点击历史）时记录
                 _isSearching = false;
                 renderSearchEmpty(q);
-                logSearchMiss(q);
+                if (logMiss) {
+                    logSearchMiss(q);
+                }
             }
         } catch (err) {
             console.error('[search]', err);
@@ -558,7 +657,10 @@ const UI = (() => {
     // ========== 全局刷新 ==========
 
     function refreshAll() {
-        const songs = window._songCache || [];
+        // 搜索模式下保持搜索结果显示，否则显示默认列表
+        const songs = _isSearching && _lastSearchResults.length > 0
+            ? _lastSearchResults
+            : _defaultSongs;
         renderSongList(songs);
         updatePlayBar();
         updateModeDisplay();

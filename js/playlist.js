@@ -12,6 +12,7 @@ const PlaylistStore = (() => {
     const KEYS = {
         favorites: 'music_player_favorites',
         playlists: 'music_player_playlists',
+        searchHistory: 'music_player_search_history',
     };
 
     // 变更监听器
@@ -126,6 +127,37 @@ const PlaylistStore = (() => {
         savePlaylists(pls);
     }
 
+    // ========== 搜索历史 ==========
+
+    const MAX_HISTORY = 10;
+
+    function getSearchHistory() {
+        try {
+            const raw = localStorage.getItem(KEYS.searchHistory);
+            return raw ? JSON.parse(raw) : [];
+        } catch {
+            return [];
+        }
+    }
+
+    function addSearchHistory(query) {
+        const trimmed = query.trim();
+        if (!trimmed) return;
+        let history = getSearchHistory();
+        history = history.filter(h => h !== trimmed);
+        history.unshift(trimmed);
+        if (history.length > MAX_HISTORY) {
+            history = history.slice(0, MAX_HISTORY);
+        }
+        localStorage.setItem(KEYS.searchHistory, JSON.stringify(history));
+        notify();
+    }
+
+    function clearSearchHistory() {
+        localStorage.removeItem(KEYS.searchHistory);
+        notify();
+    }
+
     return {
         onChange,
 
@@ -141,5 +173,9 @@ const PlaylistStore = (() => {
         deletePlaylist,
         addToPlaylist,
         removeFromPlaylist,
+
+        getSearchHistory,
+        addSearchHistory,
+        clearSearchHistory,
     };
 })();
