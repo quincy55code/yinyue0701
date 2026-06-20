@@ -185,7 +185,7 @@ const UI = (() => {
                 </div>`;
         } else {
             headerRight.innerHTML = `
-                <button class="btn-login" id="btnLogin">🔑 登录</button>`;
+                <button class="btn-login" id="btnLogin" data-action="login">🔑 登录</button>`;
         }
     }
 

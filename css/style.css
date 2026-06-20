@@ -988,9 +988,7 @@ body {
     gap: 12px;
 }
 
-.auth-input {
-    /* inherits .modal-input */
-}
+/* .auth-input used as JS selector in showAuthModal — styles inherited from .modal-input */
 
 .auth-error {
     color: #e74c3c;
