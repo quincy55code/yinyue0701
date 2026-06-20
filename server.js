@@ -337,6 +337,36 @@ app.get('/api/stream/:songId', async (req, res) => {
     }
 });
 
+/** GET /api/lyrics/:songId — 获取歌曲 LRC 歌词 */
+app.get('/api/lyrics/:songId', async (req, res) => {
+    const songId = parseInt(req.params.songId);
+    if (!songId || songId < 1) {
+        return res.status(400).json({ error: '无效的歌曲 ID' });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('songs')
+            .select('id, title, singer, lrc_text')
+            .eq('id', songId)
+            .single();
+
+        if (error || !data) {
+            return res.status(404).json({ error: '歌曲不存在' });
+        }
+
+        res.json({
+            songId: data.id,
+            title: data.title,
+            singer: data.singer || '',
+            lrc_text: data.lrc_text || null,
+        });
+    } catch (err) {
+        console.error('[lyrics]', err.message);
+        res.status(500).json({ error: '获取歌词失败' });
+    }
+});
+
 // ========== Auth 端点 ==========
 
 /** POST /api/auth/signup — 邮箱注册 */
