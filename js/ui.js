@@ -5,6 +5,8 @@
  */
 
 const UI = (() => {
+    let lyricsWindow = null;  // 歌词弹出窗口引用
+
     // ========== DOM 引用缓存 ==========
     let els = {};
 
@@ -19,6 +21,7 @@ const UI = (() => {
             btnPlay: document.getElementById('btnPlay'),
             btnPrev: document.getElementById('btnPrev'),
             btnNext: document.getElementById('btnNext'),
+            btnLyrics: document.getElementById('btnLyrics'),
             btnMode: document.getElementById('btnMode'),
             nowPlayingTitle: document.getElementById('nowPlayingTitle'),
             nowPlayingDot: document.getElementById('nowPlayingDot'),
@@ -586,6 +589,70 @@ const UI = (() => {
         }
     }
 
+    // ========== 歌词窗口管理 ==========
+
+    function openLyricsWindow() {
+        // 如果窗口已存在且未关闭，聚焦
+        if (lyricsWindow && !lyricsWindow.closed) {
+            lyricsWindow.focus();
+            return;
+        }
+
+        const song = Player.getCurrentSong();
+        const songId = song ? song.id : '';
+
+        lyricsWindow = window.open(
+            `/lyrics.html?songId=${songId}`,
+            'lyricsWin',
+            'width=360,height=520,menubar=no,toolbar=no,location=no,status=no'
+        );
+
+        if (!lyricsWindow) {
+            alert('歌词窗口被浏览器拦截，请允许弹窗后重试');
+            return;
+        }
+
+        // 等窗口加载后发送初始歌曲信息
+        lyricsWindow.addEventListener('load', () => {
+            if (song) {
+                try {
+                    const bc = new BroadcastChannel('music_player_lyrics');
+                    bc.postMessage({
+                        type: 'lyrics-open',
+                        id: song.id,
+                    });
+                    bc.close();
+                } catch {}
+            }
+        });
+    }
+
+    function closeLyricsWindow() {
+        if (lyricsWindow && !lyricsWindow.closed) {
+            lyricsWindow.close();
+        }
+        lyricsWindow = null;
+    }
+
+    function setupLyricsChannel() {
+        try {
+            const bc = new BroadcastChannel('music_player_lyrics');
+            bc.onmessage = (e) => {
+                const msg = e.data;
+                if (!msg || !msg.type) return;
+
+                switch (msg.type) {
+                    case 'lyrics-closed':
+                        lyricsWindow = null;
+                        break;
+                    case 'mode-change':
+                        // 可存储用户偏好，当前不需要
+                        break;
+                }
+            };
+        } catch {}
+    }
+
     // ========== 全局事件代理 ==========
 
     function setupGlobalListeners() {
@@ -788,6 +855,7 @@ const UI = (() => {
             Player.setMode('next');
             updateModeDisplay();
         });
+        if (els.btnLyrics) els.btnLyrics.addEventListener('click', () => openLyricsWindow());
 
         // 进度条拖拽
         if (els.progressWrap) {
@@ -896,12 +964,18 @@ const UI = (() => {
             refreshAll();
         });
 
+        setupLyricsChannel();
         setupGlobalListeners();
         renderSongList(songs);
         updatePlayBar();
         updateModeDisplay();
         switchPanel('fav'); // 默认显示收藏面板
         setupSearch();
+
+        // 主窗口关闭时自动关闭歌词窗口
+        window.addEventListener('beforeunload', () => {
+            closeLyricsWindow();
+        });
     }
 
     return {
