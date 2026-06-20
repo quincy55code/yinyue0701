@@ -1,7 +1,7 @@
 /**
  * ui.js — DOM 渲染与用户交互
  * ===========================
- * 连接 Player + PlaylistStore + HTML DOM。
+ * 连接 Player + PlaylistStore + Auth + HTML DOM。
  */
 
 const UI = (() => {
@@ -32,6 +32,9 @@ const UI = (() => {
             modalActions: document.getElementById('modalActions'),
             searchInput: document.getElementById('searchInput'),
             searchClear: document.getElementById('searchClear'),
+            btnLogin: document.getElementById('btnLogin'),
+            userMenu: document.getElementById('userMenu'),
+            authModal: document.getElementById('authModal'),
         };
     }
 
@@ -165,6 +168,113 @@ const UI = (() => {
         }
     }
 
+    // ========== Auth UI ==========
+
+    function updateAuthUI() {
+        const headerRight = document.querySelector('.header-right');
+        if (!headerRight) return;
+
+        if (Auth.isLoggedIn()) {
+            const user = Auth.getUser();
+            headerRight.innerHTML = `
+                <div class="user-menu-wrap">
+                    <button class="btn-user" id="btnUserMenu">👤 ${escapeHtml(user.username)}</button>
+                    <div class="user-dropdown" id="userDropdown" style="display:none">
+                        <div class="user-dropdown-item" data-action="logout">🚪 退出登录</div>
+                    </div>
+                </div>`;
+        } else {
+            headerRight.innerHTML = `
+                <button class="btn-login" id="btnLogin">🔑 登录</button>`;
+        }
+    }
+
+    function showAuthModal(mode) {
+        // mode: 'login' | 'register'
+        const isLogin = mode === 'login';
+        const title = isLogin ? '登录' : '注册';
+        const bodyHtml = `
+            <div class="auth-form">
+                ${!isLogin ? '<input class="modal-input auth-input" id="authUsername" placeholder="用户名" maxlength="30" autocomplete="username">' : ''}
+                <input class="modal-input auth-input" id="authEmail" type="email" placeholder="邮箱" autocomplete="email">
+                <input class="modal-input auth-input" id="authPassword" type="password" placeholder="密码（至少6位）" autocomplete="${isLogin ? 'current-password' : 'new-password'}">
+                <div class="auth-error" id="authError" style="display:none"></div>
+            </div>`;
+        const actionsHtml = `
+            <button class="btn btn-secondary" data-action="cancel">取消</button>
+            <button class="btn btn-primary" id="btnAuthSubmit">${isLogin ? '登录' : '注册'}</button>
+            <div class="auth-switch">
+                ${isLogin
+                    ? '没有账号？<a data-action="switchToRegister">去注册</a>'
+                    : '已有账号？<a data-action="switchToLogin">去登录</a>'}
+            </div>`;
+
+        showModal(title, bodyHtml, actionsHtml);
+
+        // 绑定提交事件
+        setTimeout(() => {
+            const submitBtn = document.getElementById('btnAuthSubmit');
+            const errorEl = document.getElementById('authError');
+
+            async function handleSubmit() {
+                const email = document.getElementById('authEmail').value.trim();
+                const password = document.getElementById('authPassword').value;
+
+                if (!email || !password) {
+                    errorEl.textContent = '请填写所有字段';
+                    errorEl.style.display = 'block';
+                    return;
+                }
+                if (password.length < 6) {
+                    errorEl.textContent = '密码至少需要6位';
+                    errorEl.style.display = 'block';
+                    return;
+                }
+
+                errorEl.style.display = 'none';
+                submitBtn.disabled = true;
+                submitBtn.textContent = '处理中...';
+
+                try {
+                    if (isLogin) {
+                        await Auth.login(email, password);
+                    } else {
+                        const username = document.getElementById('authUsername').value.trim();
+                        if (!username) {
+                            errorEl.textContent = '请输入用户名';
+                            errorEl.style.display = 'block';
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = '注册';
+                            return;
+                        }
+                        await Auth.signup(email, password, username);
+                    }
+                    hideModal();
+                } catch (err) {
+                    errorEl.textContent = err.message;
+                    errorEl.style.display = 'block';
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = isLogin ? '登录' : '注册';
+                }
+            }
+
+            if (submitBtn) {
+                submitBtn.addEventListener('click', handleSubmit);
+            }
+
+            // 回车提交
+            const inputs = document.querySelectorAll('.auth-input');
+            inputs.forEach(inp => {
+                inp.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') handleSubmit();
+                });
+            });
+
+            // 第一个输入框自动聚焦
+            if (inputs.length > 0) inputs[0].focus();
+        }, 100);
+    }
+
     // ========== 右侧面板 ==========
 
     function switchPanel(tab) {
@@ -184,9 +294,9 @@ const UI = (() => {
         }
     }
 
-    function renderFavoritesPanel() {
+    async function renderFavoritesPanel() {
         if (!els.panelFav) return;
-        const favs = PlaylistStore.getFavorites();
+        const favs = await PlaylistStore.getFavorites();
         if (favs.length === 0) {
             els.panelFav.innerHTML = `
                 <div class="empty-state">
@@ -195,21 +305,17 @@ const UI = (() => {
                 </div>`;
             return;
         }
-        const songs = window._songCache || [];
-        els.panelFav.innerHTML = favs.map(fid => {
-            const song = songs.find(s => String(s.id) === fid);
-            if (!song) return '';
-            return `
-                <div class="playlist-item" data-song-id="${fid}">
-                    <div class="pl-name">${escapeHtml(song.title)}</div>
-                    <button class="btn-delete" data-action="unfav" data-song-id="${fid}">✕</button>
-                </div>`;
-        }).join('');
+        // favs 现在是歌曲对象数组
+        els.panelFav.innerHTML = favs.map(song => `
+            <div class="playlist-item" data-song-id="${song.id}">
+                <div class="pl-name">${escapeHtml(song.title)}</div>
+                <button class="btn-delete" data-action="unfav" data-song-id="${song.id}">✕</button>
+            </div>`).join('');
     }
 
-    function renderPlaylistsPanel() {
+    async function renderPlaylistsPanel() {
         if (!els.panelPl) return;
-        const pls = PlaylistStore.getPlaylists();
+        const pls = await PlaylistStore.getPlaylists();
         let html = '';
         if (pls.length === 0) {
             html = `
@@ -219,35 +325,31 @@ const UI = (() => {
                 </div>`;
         } else {
             html = pls.map(pl => `
-                <div class="playlist-item" data-pl-name="${escapeHtml(pl.name)}">
+                <div class="playlist-item" data-pl-name="${escapeHtml(pl.name)}" data-pl-id="${pl.id}">
                     <div class="pl-name">📁 ${escapeHtml(pl.name)}</div>
-                    <div class="pl-count">${pl.songs.length} 首</div>
-                    <button class="btn-delete" data-action="delPl" data-pl-name="${escapeHtml(pl.name)}">✕</button>
+                    <div class="pl-count">${pl.song_count} 首</div>
+                    <button class="btn-delete" data-action="delPl" data-pl-id="${pl.id}" data-pl-name="${escapeHtml(pl.name)}">✕</button>
                 </div>`).join('');
         }
-        html += `<button class="btn-new-pl" id="btnNewPl">+ 新建歌单</button>`;
+        if (Auth.isLoggedIn()) {
+            html += `<button class="btn-new-pl" id="btnNewPl">+ 新建歌单</button>`;
+        }
         els.panelPl.innerHTML = html;
     }
 
-    function renderPlaylistDetail(plName) {
-        const pl = PlaylistStore.getPlaylist(plName);
-        if (!pl) return;
-        const songs = window._songCache || [];
+    async function renderPlaylistDetail(plId, plName) {
+        const songs = await PlaylistStore.getPlaylistSongs(plId);
 
         showModal(
             `📁 ${plName}`,
-            pl.songs.length === 0
+            songs.length === 0
                 ? '<div class="empty-state"><span class="empty-icon">🎵</span>歌单是空的<br>在歌曲列表中点击 + 添加</div>'
-                : pl.songs.map(sid => {
-                    const song = songs.find(s => String(s.id) === sid);
-                    if (!song) return '';
-                    return `
-                        <div class="pl-song-item" data-song-id="${sid}">
-                            <span>🎵 ${escapeHtml(song.title)}</span>
-                            <button class="btn-remove-song" data-action="removeFromPl" data-pl-name="${escapeHtml(plName)}" data-song-id="${sid}">✕</button>
-                        </div>`;
-                }).join(''),
-            '' // 底部没有额外按钮
+                : songs.map(song => `
+                    <div class="pl-song-item" data-song-id="${song.id}">
+                        <span>🎵 ${escapeHtml(song.title)}</span>
+                        <button class="btn-remove-song" data-action="removeFromPl" data-pl-id="${plId}" data-pl-name="${escapeHtml(plName)}" data-song-id="${song.id}">✕</button>
+                    </div>`).join(''),
+            ''
         );
     }
 
@@ -277,9 +379,9 @@ const UI = (() => {
             const inp = document.getElementById('inputPlName');
             if (inp) {
                 inp.focus();
-                inp.addEventListener('keydown', (e) => {
+                inp.addEventListener('keydown', async (e) => {
                     if (e.key === 'Enter') {
-                        const created = PlaylistStore.createPlaylist(inp.value.trim());
+                        const created = await PlaylistStore.createPlaylist(inp.value.trim());
                         if (created) {
                             hideModal();
                             refreshAll();
@@ -292,8 +394,8 @@ const UI = (() => {
         }, 100);
     }
 
-    function showAddToPlaylistModal(songId) {
-        const pls = PlaylistStore.getPlaylists();
+    async function showAddToPlaylistModal(songId) {
+        const pls = await PlaylistStore.getPlaylists();
         if (pls.length === 0) {
             showModal(
                 '添加到歌单',
@@ -305,10 +407,10 @@ const UI = (() => {
         showModal(
             '添加到歌单',
             pls.map(pl => {
-                const already = pl.songs.includes(String(songId));
-                return `<div class="playlist-item" data-action="doAddToPl" data-pl-name="${escapeHtml(pl.name)}" data-song-id="${songId}">
+                const songsInPl = pl.song_count; // 用 song_count 快速判断
+                return `<div class="playlist-item" data-action="doAddToPl" data-pl-id="${pl.id}" data-pl-name="${escapeHtml(pl.name)}" data-song-id="${songId}">
                     <div class="pl-name">📁 ${escapeHtml(pl.name)}</div>
-                    <div style="font-size:12px;color:var(--text-muted)">${already ? '✓ 已添加' : '点击添加'}</div>
+                    <div style="font-size:12px;color:var(--text-muted)">点击添加</div>
                 </div>`;
             }).join(''),
             '<button class="btn btn-secondary" data-action="cancel">关闭</button>'
@@ -481,20 +583,49 @@ const UI = (() => {
     // ========== 全局事件代理 ==========
 
     function setupGlobalListeners() {
-        document.addEventListener('click', (e) => {
+        document.addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-action]');
             if (!btn) return;
             const action = btn.dataset.action;
 
             switch (action) {
+                // 登录按钮点击
+                case 'login': {
+                    showAuthModal('login');
+                    break;
+                }
+
+                // 切换到注册
+                case 'switchToRegister': {
+                    showAuthModal('register');
+                    break;
+                }
+
+                // 切换到登录
+                case 'switchToLogin': {
+                    showAuthModal('login');
+                    break;
+                }
+
+                // 退出登录
+                case 'logout': {
+                    if (confirm('确定退出登录吗？')) {
+                        Auth.logout();
+                    }
+                    break;
+                }
+
                 // 收藏切换
                 case 'fav': {
                     e.stopPropagation();
+                    if (!Auth.isLoggedIn()) {
+                        showAuthModal('login');
+                        return;
+                    }
                     const sid = btn.dataset.songId;
-                    const isFav = PlaylistStore.toggleFavorite(sid);
+                    const isFav = await PlaylistStore.toggleFavorite(sid);
                     btn.classList.toggle('favorited', isFav);
                     btn.innerHTML = isFav ? '❤️' : '🤍';
-                    // 重新触发动画
                     if (isFav) {
                         btn.classList.remove('favorited');
                         void btn.offsetWidth;
@@ -507,13 +638,19 @@ const UI = (() => {
                 // 添加到歌单
                 case 'addToPl': {
                     e.stopPropagation();
+                    if (!Auth.isLoggedIn()) {
+                        showAuthModal('login');
+                        return;
+                    }
                     showAddToPlaylistModal(btn.dataset.songId);
                     break;
                 }
 
                 // 在 modal 中确认添加到歌单
                 case 'doAddToPl': {
-                    PlaylistStore.addToPlaylist(btn.dataset.plName, btn.dataset.songId);
+                    const plId = btn.dataset.plId;
+                    const songId = btn.dataset.songId;
+                    await PlaylistStore.addToPlaylist(plId, songId);
                     hideModal();
                     refreshAll();
                     break;
@@ -521,7 +658,7 @@ const UI = (() => {
 
                 // 取消收藏
                 case 'unfav': {
-                    PlaylistStore.removeFavorite(btn.dataset.songId);
+                    await PlaylistStore.removeFavorite(btn.dataset.songId);
                     refreshAll();
                     break;
                 }
@@ -529,8 +666,10 @@ const UI = (() => {
                 // 删除歌单
                 case 'delPl': {
                     e.stopPropagation();
-                    if (confirm(`确定删除歌单「${btn.dataset.plName}」吗？`)) {
-                        PlaylistStore.deletePlaylist(btn.dataset.plName);
+                    const plId = btn.dataset.plId;
+                    const plName = btn.dataset.plName;
+                    if (confirm(`确定删除歌单「${plName}」吗？`)) {
+                        await PlaylistStore.deletePlaylist(plId);
                         refreshAll();
                     }
                     break;
@@ -539,8 +678,10 @@ const UI = (() => {
                 // 从歌单中移除歌曲
                 case 'removeFromPl': {
                     e.stopPropagation();
-                    PlaylistStore.removeFromPlaylist(btn.dataset.plName, btn.dataset.songId);
-                    renderPlaylistDetail(btn.dataset.plName);
+                    const plId = btn.dataset.plId;
+                    const songId = btn.dataset.songId;
+                    await PlaylistStore.removeFromPlaylist(plId, songId);
+                    await renderPlaylistDetail(btn.dataset.plId, btn.dataset.plName);
                     refreshAll();
                     break;
                 }
@@ -557,7 +698,7 @@ const UI = (() => {
                 case 'confirm': {
                     const inp = document.getElementById('inputPlName');
                     if (inp && inp.value.trim()) {
-                        const created = PlaylistStore.createPlaylist(inp.value.trim());
+                        const created = await PlaylistStore.createPlaylist(inp.value.trim());
                         if (created) {
                             hideModal();
                             refreshAll();
@@ -572,10 +713,10 @@ const UI = (() => {
 
         // 点击歌单项目 → 查看详情
         document.addEventListener('click', (e) => {
-            const item = e.target.closest('.playlist-item[data-pl-name]');
+            const item = e.target.closest('.playlist-item[data-pl-id]');
             if (!item) return;
-            if (e.target.closest('button')) return; // 不拦截按钮
-            renderPlaylistDetail(item.dataset.plName);
+            if (e.target.closest('button')) return;
+            renderPlaylistDetail(item.dataset.plId, item.dataset.plName);
         });
 
         // 点击歌单中的歌曲 → 播放
@@ -610,6 +751,23 @@ const UI = (() => {
         document.addEventListener('click', (e) => {
             if (e.target.id === 'btnNewPl') {
                 showNewPlaylistModal();
+            }
+        });
+
+        // 用户菜单下拉
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('#btnUserMenu');
+            if (btn) {
+                const dropdown = document.getElementById('userDropdown');
+                if (dropdown) {
+                    dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+                }
+                return;
+            }
+            // 点击其他地方关闭
+            const dropdown = document.getElementById('userDropdown');
+            if (dropdown && !e.target.closest('.user-menu-wrap')) {
+                dropdown.style.display = 'none';
             }
         });
 
@@ -656,7 +814,7 @@ const UI = (() => {
 
     // ========== 全局刷新 ==========
 
-    function refreshAll() {
+    async function refreshAll() {
         // 搜索模式下保持搜索结果显示，否则显示默认列表
         const songs = _isSearching && _lastSearchResults.length > 0
             ? _lastSearchResults
@@ -664,18 +822,27 @@ const UI = (() => {
         renderSongList(songs);
         updatePlayBar();
         updateModeDisplay();
-        if (els.panelFav && els.panelFav.style.display !== 'none') renderFavoritesPanel();
-        if (els.panelPl && els.panelPl.style.display !== 'none') renderPlaylistsPanel();
+        if (els.panelFav && els.panelFav.style.display !== 'none') await renderFavoritesPanel();
+        if (els.panelPl && els.panelPl.style.display !== 'none') await renderPlaylistsPanel();
     }
 
     // ========== 初始化 ==========
 
-    function init(songs) {
+    async function init(songs) {
         cacheDom();
         window._songCache = songs;
         _defaultSongs = songs;
         Player.setSongs(songs);
         Player.init();
+
+        // 恢复登录状态
+        await Auth.init();
+        updateAuthUI();
+
+        // 如果已登录，加载服务器数据
+        if (Auth.isLoggedIn()) {
+            await PlaylistStore.loadFromServer();
+        }
 
         // 监听 Player 事件
         Player.on((event, data) => {
@@ -706,6 +873,17 @@ const UI = (() => {
 
         // 监听歌单变更
         PlaylistStore.onChange(() => {
+            refreshAll();
+        });
+
+        // 监听登录状态变化
+        Auth.onChange(async (user) => {
+            updateAuthUI();
+            if (user) {
+                await PlaylistStore.loadFromServer();
+            } else {
+                PlaylistStore.clearAll();
+            }
             refreshAll();
         });
 
