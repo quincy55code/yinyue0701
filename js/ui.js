@@ -593,7 +593,7 @@ const UI = (() => {
                 const songsInPl = pl.song_count; // 用 song_count 快速判断
                 return `<div class="playlist-item" data-action="doAddToPl" data-pl-id="${pl.id}" data-pl-name="${escapeHtml(pl.name)}" data-song-id="${songId}">
                     <div class="pl-name">📁 ${escapeHtml(pl.name)}</div>
-                    <div style="font-size:12px;color:var(--text-muted)">点击添加</div>
+                    <div style="font-size:12px;color:var(--text-tertiary)">点击添加</div>
                 </div>`;
             }).join(''),
             '<button class="btn btn-secondary" data-action="cancel">关闭</button>'
@@ -783,7 +783,7 @@ const UI = (() => {
             <div class="empty-state search-empty">
                 <span class="empty-icon">🔍</span>
                 未找到「<strong>${escapeHtml(q)}</strong>」<br>
-                <small style="color:var(--text-muted)">已记录你的搜索，后续会添加相关歌曲</small>
+                <small style="color:var(--text-tertiary)">已记录你的搜索，后续会添加相关歌曲</small>
             </div>`;
     }
 
@@ -1278,6 +1278,17 @@ const UI = (() => {
         const fabBtn = document.getElementById('fabDrawer');
         if (fabBtn) {
             fabBtn.addEventListener('click', () => UI.openDrawer('fav'));
+        }
+
+        // 手机端点击 player-info 展开迷你播放栏
+        const playerInfo = document.querySelector('.player-info');
+        const playerBar = document.getElementById('playerBar');
+        if (playerInfo && playerBar) {
+            playerInfo.addEventListener('click', () => {
+                if (window.innerWidth < 768) {
+                    playerBar.classList.toggle('expanded');
+                }
+            });
         }
 
         // 点击遮罩关闭抽屉
