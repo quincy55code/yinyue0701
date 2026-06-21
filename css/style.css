@@ -330,12 +330,6 @@ body {
     100% { transform: scale(1); }
 }
 
-/* View transition entrance */
-@keyframes viewFade {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-
 /* ================================================================
    标签系统 — 视图导航、卡片网格、徽章
    ================================================================ */
@@ -400,6 +394,7 @@ body {
     position: relative;
     overflow: hidden;
     user-select: none;
+    animation: cardEnter var(--duration-slow) var(--ease-out) both;
 }
 
 .tag-card::before {
