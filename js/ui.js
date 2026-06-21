@@ -7,12 +7,22 @@
 const UI = (() => {
     let lyricsWindow = null;  // 歌词弹出窗口引用
 
+    // 标签系统状态
+    let _tagsCache = [];        // 标签树缓存
+    let _currentView = 'home';  // 'home' | 'tag' | 'star' | 'search'
+    let _currentTagId = null;   // 当前查看的标签 ID
+    let _currentTagName = '';   // 当前查看的标签名（用于标题）
+
     // ========== DOM 引用缓存 ==========
     let els = {};
 
     function cacheDom() {
         els = {
-            songList: document.getElementById('songList'),
+            viewContainer: document.getElementById('viewContainer'),
+            viewHeader: document.getElementById('viewHeader'),
+            btnBack: document.getElementById('btnBack'),
+            viewTitle: document.getElementById('viewTitle'),
+            sectionHeader: document.getElementById('sectionHeader'),
             playerBar: document.getElementById('playerBar'),
             progressWrap: document.getElementById('progressWrap'),
             progressFill: document.getElementById('progressFill'),
@@ -73,39 +83,45 @@ const UI = (() => {
     // ========== 渲染歌曲列表 ==========
 
     function renderSongList(songs) {
-        if (!els.songList) return;
+        if (!els.viewContainer) return;
         const currentId = Player.getCurrentSong() ? String(Player.getCurrentSong().id) : null;
 
-        els.songList.innerHTML = '';
+        let html = '';
         songs.forEach((song, idx) => {
             const sid = String(song.id);
             const isFav = PlaylistStore.isFavorite(sid);
             const isPlaying = currentId === sid;
 
             const singerHtml = song.singer ? `<div class="card-singer">${escapeHtml(song.singer)}</div>` : '';
-            const card = h(`
+            const tagsHtml = (song.tags && song.tags.length > 0) ? `
+                <div class="tag-badges">
+                    ${song.tags.map(t => `<span class="tag-badge" data-tag-name="${escapeHtml(t)}">${escapeHtml(t)}</span>`).join('')}
+                </div>` : '';
+
+            html += `
                 <div class="song-card${isPlaying ? ' playing' : ''}" data-song-id="${sid}">
                     <div class="card-index">${idx + 1}</div>
                     <div class="card-info">
                         <div class="card-title">${escapeHtml(song.title)}</div>
                         ${singerHtml}
                         <div class="card-meta">${song.duration ? formatTime(song.duration) : '完整版'}</div>
+                        ${tagsHtml}
                     </div>
                     <div class="card-actions">
                         <button class="btn-fav${isFav ? ' favorited' : ''}" data-action="fav" data-song-id="${sid}" title="收藏">${isFav ? '❤️' : '🤍'}</button>
                         <button class="btn-add" data-action="addToPl" data-song-id="${sid}" title="添加到歌单">+</button>
                     </div>
-                </div>
-            `);
+                </div>`;
+        });
 
-            // 点击卡片播放
+        els.viewContainer.innerHTML = html;
+
+        // 绑定卡片点击事件
+        els.viewContainer.querySelectorAll('.song-card').forEach(card => {
             card.addEventListener('click', (e) => {
-                // 不拦截按钮点击
-                if (e.target.closest('button')) return;
-                Player.play(sid);
+                if (e.target.closest('button') || e.target.closest('.tag-badge')) return;
+                Player.play(card.dataset.songId);
             });
-
-            els.songList.appendChild(card);
         });
     }
 
@@ -113,6 +129,158 @@ const UI = (() => {
         const d = document.createElement('div');
         d.textContent = str;
         return d.innerHTML;
+    }
+
+    // ========== 标签卡片网格（首页） ==========
+
+    /** 所有标签的 emoji 映射 */
+    function getTagEmoji(name) {
+        const map = {
+            '2026热歌': '🔥', '一人一首成名曲': '⭐', '粤语': '🎬',
+            'KTV': '🎤', '民谣': '🎸', '热门': '🔥',
+            '动漫': '🎭', '经典': '📻', '伤感': '💔',
+            '古风': '🏯', '8090': '📼', '游戏': '🎮',
+            '纯音乐': '🎹', '英语': '🌍', '摇滚': '🎸',
+            '明星': '🌟',
+        };
+        return map[name] || '🎵';
+    }
+
+    function renderTagGrid(tags) {
+        if (!els.viewContainer) return;
+
+        let html = '<div class="tag-grid">';
+        tags.forEach(tag => {
+            const emoji = getTagEmoji(tag.name);
+            const color = tag.color || '#E8917B';
+            const isStar = tag.name === '明星';
+            html += `
+                <div class="tag-card" data-tag-id="${tag.id}" data-tag-name="${escapeHtml(tag.name)}" data-is-star="${isStar ? '1' : '0'}" style="--tag-color:${color}">
+                    <span class="tag-card-icon">${emoji}</span>
+                    <div class="tag-card-name">${escapeHtml(tag.name)}</div>
+                    <div class="tag-card-count">${tag.song_count || 0} 首</div>
+                </div>`;
+        });
+        html += '</div>';
+
+        els.viewContainer.innerHTML = html;
+    }
+
+    /** 明星子卡片列表 */
+    function renderStarCards(parentTag) {
+        if (!els.viewContainer) return;
+
+        const children = parentTag.children || [];
+        let html = '<div class="tag-grid">';
+        children.forEach(tag => {
+            const color = tag.color || '#E8917B';
+            html += `
+                <div class="tag-card" data-tag-id="${tag.id}" data-tag-name="${escapeHtml(tag.name)}" style="--tag-color:${color}">
+                    <span class="tag-card-icon">🎤</span>
+                    <div class="tag-card-name">${escapeHtml(tag.name)}</div>
+                    <div class="tag-card-count">${tag.song_count || 0} 首</div>
+                </div>`;
+        });
+        html += '</div>';
+
+        els.viewContainer.innerHTML = html;
+    }
+
+    /** 显示/隐藏返回导航栏 */
+    function updateViewHeader(show, title) {
+        if (!els.viewHeader || !els.sectionHeader || !els.viewTitle) return;
+        if (show) {
+            els.viewHeader.style.display = 'flex';
+            els.sectionHeader.style.display = 'none';
+            els.viewTitle.textContent = title || '';
+        } else {
+            els.viewHeader.style.display = 'none';
+            els.sectionHeader.style.display = 'block';
+        }
+    }
+
+    /** 导航到标签歌曲列表 */
+    async function navigateToTag(tagId, tagName) {
+        _currentView = 'tag';
+        _currentTagId = tagId;
+        _currentTagName = tagName;
+        updateViewHeader(true, tagName);
+
+        // 显示加载状态
+        if (els.viewContainer) {
+            els.viewContainer.innerHTML = '<div class="empty-state"><span class="empty-icon">⏳</span>加载中...</div>';
+        }
+
+        try {
+            const resp = await fetch(`/api/songs?tag=${encodeURIComponent(tagName)}&limit=50`);
+            if (!resp.ok) throw new Error('获取歌曲失败');
+            const songs = await resp.json();
+
+            if (songs.length === 0) {
+                if (els.viewContainer) {
+                    els.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">🎵</span>该标签下暂无歌曲</div>`;
+                }
+                return;
+            }
+
+            mergeToCache(songs);
+            _lastSearchResults = songs;
+            renderSongList(songs);
+        } catch (err) {
+            console.error('[navigateToTag]', err);
+            if (els.viewContainer) {
+                els.viewContainer.innerHTML = '<div class="empty-state"><span class="empty-icon">⚠️</span>加载失败</div>';
+            }
+        }
+    }
+
+    /** 导航到明星子卡片 */
+    function navigateToStar(parentTag) {
+        _currentView = 'star';
+        _currentTagId = parentTag.id;
+        _currentTagName = parentTag.name;
+        updateViewHeader(true, parentTag.name);
+        renderStarCards(parentTag);
+    }
+
+    /** 返回上一级 */
+    function goBack() {
+        if (_currentView === 'star') {
+            // 从明星子卡片返回首页
+            navigateHome();
+        } else if (_currentView === 'tag' || _currentView === 'search') {
+            // 从歌曲列表/搜索结果返回首页
+            _isSearching = false;
+            if (els.searchInput) els.searchInput.value = '';
+            if (els.searchClear) els.searchClear.style.display = 'none';
+            navigateHome();
+        }
+    }
+
+    /** 返回首页标签网格 */
+    function navigateHome() {
+        _currentView = 'home';
+        _currentTagId = null;
+        _currentTagName = '';
+        _isSearching = false;
+        _lastSearchResults = [];
+        updateViewHeader(false, '');
+        if (els.searchInput) els.searchInput.value = '';
+        if (els.searchClear) els.searchClear.style.display = 'none';
+        renderTagGrid(_tagsCache);
+    }
+
+    /** 在所有标签中查找（包括子标签） */
+    function findTagByName(name) {
+        for (const t of _tagsCache) {
+            if (t.name === name) return t;
+            if (t.children) {
+                for (const c of t.children) {
+                    if (c.name === name) return c;
+                }
+            }
+        }
+        return null;
     }
 
     // ========== 更新播放栏 ==========
@@ -431,6 +599,7 @@ const UI = (() => {
     let _isSearching = false;        // 当前是否在搜索模式
     let _defaultSongs = [];          // 默认歌曲缓存（搜索清空后恢复）
     let _lastSearchResults = [];     // 最近一次搜索结果（用于面板刷新时保持显示）
+    let _savedView = null;           // 搜索前的视图状态（用于取消搜索后恢复）
 
     function setupSearch() {
         const input = els.searchInput;
@@ -507,10 +676,10 @@ const UI = (() => {
 
             clearTimeout(_searchTimer);
             if (!q) {
-                // 清空搜索框 → 恢复默认列表
+                // 清空搜索框 → 恢复之前视图
                 _isSearching = false;
                 _lastSearchResults = [];
-                renderSongList(_defaultSongs);
+                restorePreviousView();
                 return;
             }
 
@@ -531,17 +700,52 @@ const UI = (() => {
             input.value = '';
             clearBtn.style.display = 'none';
             _isSearching = false;
-            renderSongList(_defaultSongs);
+            _lastSearchResults = [];
+            restorePreviousView();
             input.focus();
         });
+    }
+
+    /** 取消搜索后恢复之前的视图 */
+    function restorePreviousView() {
+        if (_savedView) {
+            const sv = _savedView;
+            _savedView = null;
+            _currentView = sv.view;
+            _currentTagId = sv.tagId;
+            _currentTagName = sv.tagName;
+
+            if (sv.view === 'home') {
+                navigateHome();
+            } else if (sv.view === 'tag') {
+                updateViewHeader(true, sv.tagName);
+                navigateToTag(sv.tagId, sv.tagName);
+            } else if (sv.view === 'star') {
+                updateViewHeader(true, sv.tagName);
+                const parentTag = _tagsCache.find(t => t.id === sv.tagId);
+                if (parentTag) renderStarCards(parentTag);
+            }
+        } else {
+            navigateHome();
+        }
     }
 
     async function doSearch(q, { logMiss = false } = {}) {
         if (!q || q.length > 100) return;
 
-        _isSearching = true;
+        // 保存搜索前的视图状态
+        if (!_isSearching) {
+            _savedView = {
+                view: _currentView,
+                tagId: _currentTagId,
+                tagName: _currentTagName,
+            };
+        }
 
-        // 保存搜索历史（notify → refreshAll 会因 _isSearching 保持搜索状态）
+        _isSearching = true;
+        updateViewHeader(true, `搜索: ${q}`);
+
+        // 保存搜索历史
         PlaylistStore.addSearchHistory(q);
 
         try {
@@ -555,7 +759,7 @@ const UI = (() => {
                 _lastSearchResults = data.results;
                 renderSongList(data.results);
             } else {
-                // 无结果 → 显示空状态，仅在主动搜索（Enter/点击历史）时记录
+                // 无结果 → 显示空状态，仅在主动搜索时记录
                 _isSearching = false;
                 renderSearchEmpty(q);
                 if (logMiss) {
@@ -568,8 +772,8 @@ const UI = (() => {
     }
 
     function renderSearchEmpty(q) {
-        if (!els.songList) return;
-        els.songList.innerHTML = `
+        if (!els.viewContainer) return;
+        els.viewContainer.innerHTML = `
             <div class="empty-state search-empty">
                 <span class="empty-icon">🔍</span>
                 未找到「<strong>${escapeHtml(q)}</strong>」<br>
@@ -656,6 +860,55 @@ const UI = (() => {
     // ========== 全局事件代理 ==========
 
     function setupGlobalListeners() {
+        // 返回按钮
+        if (els.btnBack) {
+            els.btnBack.addEventListener('click', () => goBack());
+        }
+
+        // 标签卡片点击（事件代理）
+        if (els.viewContainer) {
+            els.viewContainer.addEventListener('click', (e) => {
+                const tagCard = e.target.closest('.tag-card');
+                if (tagCard) {
+                    const tagId = parseInt(tagCard.dataset.tagId);
+                    const tagName = tagCard.dataset.tagName;
+                    const isStar = tagCard.dataset.isStar === '1';
+
+                    if (isStar) {
+                        // 明星 → 显示子卡片
+                        const parentTag = _tagsCache.find(t => t.id === tagId);
+                        if (parentTag) navigateToStar(parentTag);
+                    } else if (_currentView === 'star') {
+                        // 在明星子卡片视图 → 点击子明星 → 查看歌曲
+                        navigateToTag(tagId, tagName);
+                    } else {
+                        // 首页普通标签 → 查看歌曲
+                        navigateToTag(tagId, tagName);
+                    }
+                    return;
+                }
+
+                // 标签徽章点击 → 导航到该标签的歌曲列表
+                const tagBadge = e.target.closest('.tag-badge');
+                if (tagBadge) {
+                    e.stopPropagation();
+                    const tagName = tagBadge.dataset.tagName;
+                    // 找到对应标签
+                    const found = findTagByName(tagName);
+                    if (found) {
+                        if (els.searchInput) {
+                            els.searchInput.value = '';
+                            els.searchClear.style.display = 'none';
+                        }
+                        _isSearching = false;
+                        _savedView = null;
+                        navigateToTag(found.id, found.name);
+                    }
+                    return;
+                }
+            });
+        }
+
         document.addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-action]');
             if (!btn) return;
@@ -892,11 +1145,20 @@ const UI = (() => {
     // ========== 全局刷新 ==========
 
     function refreshAll() {
-        // 搜索模式下保持搜索结果显示，否则显示默认列表
-        const songs = _isSearching && _lastSearchResults.length > 0
-            ? _lastSearchResults
-            : _defaultSongs;
-        renderSongList(songs);
+        // 搜索模式下保持搜索结果显示
+        if (_isSearching && _lastSearchResults.length > 0) {
+            renderSongList(_lastSearchResults);
+        } else if (_currentView === 'home') {
+            renderTagGrid(_tagsCache);
+        } else if (_currentView === 'tag') {
+            // 标签视图下保持显示歌曲
+            if (_lastSearchResults.length > 0) {
+                renderSongList(_lastSearchResults);
+            }
+        } else if (_currentView === 'star') {
+            const parentTag = _tagsCache.find(t => t.id === _currentTagId);
+            if (parentTag) renderStarCards(parentTag);
+        }
         updatePlayBar();
         updateModeDisplay();
         if (els.panelFav && els.panelFav.style.display !== 'none') renderFavoritesPanel();
@@ -905,10 +1167,11 @@ const UI = (() => {
 
     // ========== 初始化 ==========
 
-    async function init(songs) {
+    async function init(songs, tags) {
         cacheDom();
         window._songCache = songs;
         _defaultSongs = songs;
+        _tagsCache = tags || [];
         Player.setSongs(songs);
         Player.init();
 
@@ -966,7 +1229,8 @@ const UI = (() => {
 
         setupLyricsChannel();
         setupGlobalListeners();
-        renderSongList(songs);
+        // 默认显示首页标签卡片网格（而非歌曲列表）
+        renderTagGrid(_tagsCache);
         updatePlayBar();
         updateModeDisplay();
         switchPanel('fav'); // 默认显示收藏面板
@@ -981,6 +1245,9 @@ const UI = (() => {
     return {
         init,
         renderSongList,
+        renderTagGrid,
+        navigateToTag,
+        navigateHome,
         updatePlayBar,
         updateModeDisplay,
         refreshAll,

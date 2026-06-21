@@ -166,6 +166,32 @@ const Lyrics = (() => {
         }
     }
 
+    // ========== 自适应字号 ==========
+
+    function autoResize() {
+        if (!elBody) return;
+
+        const w = elBody.clientWidth;
+        const h = elBody.clientHeight;
+
+        if (mode === 'horizontal') {
+            // 横版：active 字体按容器宽度自适应（留 16% 边距）
+            const activeSize = Math.max(16, Math.min(30, w * 0.075));
+            const nextSize = Math.max(12, activeSize * 0.55);
+            const baseSize = Math.max(11, activeSize * 0.5);
+            elBody.style.setProperty('--h-active-size', Math.round(activeSize) + 'px');
+            elBody.style.setProperty('--h-next-size', Math.round(nextSize) + 'px');
+            elBody.style.setProperty('--h-base-size', Math.round(baseSize) + 'px');
+        } else {
+            // 竖版：按高度自适应（约 10 行可见）
+            const lineHeight = Math.max(28, Math.min(50, h / 10));
+            const activeSize = Math.max(14, lineHeight * 0.52);
+            const baseSize = Math.max(12, lineHeight * 0.38);
+            elBody.style.setProperty('--v-active-size', Math.round(activeSize) + 'px');
+            elBody.style.setProperty('--v-base-size', Math.round(baseSize) + 'px');
+        }
+    }
+
     // ========== 模式切换 ==========
 
     function toggleMode() {
@@ -174,6 +200,7 @@ const Lyrics = (() => {
             elBtnMode.textContent = mode === 'vertical' ? '≡' : '—';
             elBtnMode.title = mode === 'vertical' ? '竖条形模式' : '长条形模式';
         }
+        autoResize();
         render();
 
         // 通知主窗口
@@ -266,6 +293,13 @@ const Lyrics = (() => {
         setupDrag();
         setupChannel();
         setupEvents();
+
+        // 自适应字号
+        autoResize();
+        window.addEventListener('resize', () => {
+            autoResize();
+            render();
+        });
 
         // 检查 URL 参数中是否有 songId，有则自动加载
         const urlParams = new URLSearchParams(window.location.search);

@@ -934,7 +934,7 @@ body {
 }
 
 .btn-secondary:hover {
-    background: var(--bg-hover);
+    background: var(--bg-active);
 }
 
 /* Playlist song item (inside playlist detail) */

@@ -21,15 +21,19 @@
 
     <!-- ====== 主内容区 ====== -->
     <main class="app-main">
-        <!-- 左侧：歌曲列表 -->
+        <!-- 左侧：主视图区域 -->
         <section class="song-list-panel">
-            <div class="section-header">🎶 歌曲列表</div>
+            <div class="view-header" id="viewHeader" style="display:none">
+                <button class="btn-back" id="btnBack" title="返回">← 返回</button>
+                <span class="view-title" id="viewTitle"></span>
+            </div>
+            <div class="section-header" id="sectionHeader">🎵 音乐分类</div>
             <div class="search-wrap">
                 <input type="text" class="search-input" id="searchInput" placeholder="🔍 搜索歌曲、歌手…" autocomplete="off">
                 <button class="search-clear" id="searchClear" style="display:none">✕</button>
             </div>
-            <div class="song-list" id="songList">
-                <!-- 动态渲染 -->
+            <div class="view-container" id="viewContainer">
+                <!-- 动态渲染：标签卡片网格 / 歌曲列表 / 明星子卡片 -->
             </div>
         </section>
 
@@ -94,13 +98,17 @@
         // 启动应用
         (async function bootstrap() {
             try {
-                const resp = await fetch('/api/songs');
-                if (!resp.ok) throw new Error('无法获取歌曲列表');
-                const songs = await resp.json();
-                UI.init(songs);
+                const [songsResp, tagsResp] = await Promise.all([
+                    fetch('/api/songs'),
+                    fetch('/api/tags')
+                ]);
+                if (!songsResp.ok) throw new Error('无法获取歌曲列表');
+                const songs = await songsResp.json();
+                const tagsData = tagsResp.ok ? await tagsResp.json() : { tags: [] };
+                UI.init(songs, tagsData.tags || []);
             } catch (err) {
                 console.error('启动失败:', err);
-                document.getElementById('songList').innerHTML = `
+                document.getElementById('viewContainer').innerHTML = `
                     <div class="empty-state" style="padding:60px 20px">
                         <span class="empty-icon">⚠️</span>
                         无法连接后端服务<br>

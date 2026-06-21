@@ -98,6 +98,47 @@ function formatSong(s) {
     };
 }
 
+// 批量查询标签并附加到歌曲对象上（避免 N+1）
+async function attachTags(songs) {
+    if (!songs || songs.length === 0) return songs;
+    const songIds = songs.map(s => s.id);
+
+    const { data: stRows, error: stErr } = await supabase
+        .from('song_tags')
+        .select('song_id, tag_id')
+        .in('song_id', songIds);
+
+    if (stErr || !stRows || stRows.length === 0) {
+        // 没有标签关联，给每首歌空数组
+        return songs.map(s => ({ ...s, tags: [] }));
+    }
+
+    // 收集所有涉及的 tag_id
+    const tagIds = [...new Set(stRows.map(r => r.tag_id))];
+
+    const { data: tagRows } = await supabase
+        .from('tags')
+        .select('id, name')
+        .in('id', tagIds);
+
+    // 构建 tag_id → name 映射
+    const tagMap = {};
+    for (const t of (tagRows || [])) {
+        tagMap[t.id] = t.name;
+    }
+
+    // 构建 song_id → [tagName, ...] 映射
+    const songTagsMap = {};
+    for (const st of stRows) {
+        if (!songTagsMap[st.song_id]) songTagsMap[st.song_id] = [];
+        if (tagMap[st.tag_id]) {
+            songTagsMap[st.song_id].push(tagMap[st.tag_id]);
+        }
+    }
+
+    return songs.map(s => ({ ...s, tags: songTagsMap[s.id] || [] }));
+}
+
 // ========== 原硬编码歌曲（备份） ==========
 // const SONGS = [
 //     { id: 1, title: "离别开出花", bvid: "BV1pY5q6jECZ", page: 1, ... },
@@ -115,21 +156,61 @@ function cacheKey(bvid, page) { return `${bvid}:${page || 1}`; }
 
 // ========== API 端点 ==========
 
-/** GET /api/songs — 从 Supabase 查询前 10 首歌曲 */
-app.get('/api/songs', async (_req, res) => {
+/** GET /api/songs — 查询歌曲（支持按标签筛选 + 可选返回数量） */
+app.get('/api/songs', async (req, res) => {
     try {
-        const { data, error } = await supabase
+        const tagName = (req.query.tag || '').trim();
+        const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+
+        let songIds = null;
+
+        // 如果指定了标签，先查出对应的 song_id 列表
+        if (tagName) {
+            const { data: tagRow } = await supabase
+                .from('tags')
+                .select('id')
+                .eq('name', tagName)
+                .single();
+
+            if (!tagRow) {
+                return res.json([]);
+            }
+
+            const { data: stRows } = await supabase
+                .from('song_tags')
+                .select('song_id')
+                .eq('tag_id', tagRow.id);
+
+            songIds = (stRows || []).map(r => r.song_id);
+            if (songIds.length === 0) {
+                return res.json([]);
+            }
+        }
+
+        // 构建查询
+        let query = supabase
             .from('songs')
             .select('id,title,singer,bvid,page,start_seconds,end_seconds,duration_seconds,cover_url,bilibili_url')
             .order('id', { ascending: true })
-            .limit(10);
+            .limit(limit);
+
+        // 如果有标签筛选，添加 in 过滤
+        if (songIds) {
+            // Supabase 的 `.in()` 最多 300 个值，这里分批处理
+            query = query.in('id', songIds.slice(0, 300));
+        }
+
+        const { data, error } = await query;
 
         if (error) {
             console.error('[songs] Supabase error:', error.message);
             return res.status(500).json({ error: '获取歌曲列表失败' });
         }
 
-        res.json((data || []).map(formatSong).filter(Boolean));
+        const songs = (data || []).map(formatSong).filter(Boolean);
+        const songsWithTags = await attachTags(songs);
+
+        res.json(songsWithTags);
     } catch (err) {
         console.error('[songs]', err.message);
         res.status(500).json({ error: '获取歌曲列表失败' });
@@ -156,8 +237,11 @@ app.get('/api/search', async (req, res) => {
             return res.status(500).json({ error: '搜索失败' });
         }
 
+        const songs = (data || []).map(formatSong).filter(Boolean);
+        const songsWithTags = await attachTags(songs);
+
         res.json({
-            results: (data || []).map(formatSong).filter(Boolean),
+            results: songsWithTags,
             query: q,
         });
     } catch (err) {
@@ -200,6 +284,66 @@ app.post('/api/search-log', async (req, res) => {
     } catch (err) {
         console.error('[search-log]', err.message);
         res.status(500).json({ error: '记录失败' });
+    }
+});
+
+/** GET /api/tags — 获取标签树（顶级标签 + 子标签 + 歌曲计数） */
+app.get('/api/tags', async (_req, res) => {
+    try {
+        // 查询所有标签
+        const { data: allTags, error: tagErr } = await supabase
+            .from('tags')
+            .select('id, name, color, parent_id, sort_order')
+            .order('sort_order', { ascending: true });
+
+        if (tagErr) {
+            console.error('[tags]', tagErr.message);
+            return res.status(500).json({ error: '获取标签失败' });
+        }
+
+        if (!allTags || allTags.length === 0) {
+            return res.json({ tags: [] });
+        }
+
+        // 批量查询所有标签的歌曲数
+        const { data: stRows } = await supabase
+            .from('song_tags')
+            .select('tag_id');
+
+        const countMap = {};
+        for (const row of (stRows || [])) {
+            countMap[row.tag_id] = (countMap[row.tag_id] || 0) + 1;
+        }
+
+        // 分离顶级标签和子标签
+        const topTags = allTags.filter(t => !t.parent_id);
+        const childTags = allTags.filter(t => t.parent_id);
+
+        // 构建结果
+        const tags = topTags.map(t => {
+            const entry = {
+                id: t.id,
+                name: t.name,
+                color: t.color,
+                song_count: countMap[t.id] || 0,
+            };
+            // 如果有子标签，附加 children
+            const children = childTags.filter(c => c.parent_id === t.id);
+            if (children.length > 0) {
+                entry.children = children.map(c => ({
+                    id: c.id,
+                    name: c.name,
+                    color: c.color,
+                    song_count: countMap[c.id] || 0,
+                }));
+            }
+            return entry;
+        });
+
+        res.json({ tags });
+    } catch (err) {
+        console.error('[tags]', err.message);
+        res.status(500).json({ error: '获取标签失败' });
     }
 });
 

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s http://localhost:8765/api/auth/me)",
+      "Bash(curl -s -X POST http://localhost:8765/api/auth/signup -H 'Content-Type: application/json' -d '{\"email\":\"test-task3@example.com\",\"password\":\"123456\",\"username\":\"测试用户\"}')",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\); const j=JSON.parse\\(d\\); console.log\\('user:', j.user?.id?.slice\\(0,8\\)+'...', j.user?.username\\); console.log\\('session:', j.session?.access_token?.slice\\(0,20\\)+'...'\\);\")",
+      "Bash(curl -s -X POST http://localhost:8765/api/auth/signup -H 'Content-Type: application/json' -d '{\"email\":\"test-task3-new@example.com\",\"password\":\"123456\",\"username\":\"测试用户3\"}')",
+      "Bash(curl -s -X POST http://localhost:8765/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"test@example.com\",\"password\":\"123456\"}')",
+      "Bash(curl -s -X POST http://localhost:8765/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"test-task3-new@example.com\",\"password\":\"123456\"}')",
+      "Bash(curl -s 'https://orphftlwdwuvoscizndx.supabase.co/rest/v1/songs?select=id,title,singer&id=gte.101&order=id.asc' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ycGhmdGx3ZHd1dm9zY2l6bmR4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTkyNDA4OSwiZXhwIjoyMDk3NTAwMDg5fQ.jDg11vKVIkCYsFPN5T6aLdU08cRx-FXSeZVfRJmi4mo' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ycGhmdGx3ZHd1dm9zY2l6bmR4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTkyNDA4OSwiZXhwIjoyMDk3NTAwMDg5fQ.jDg11vKVIkCYsFPN5T6aLdU08cRx-FXSeZVfRJmi4mo')",
+      "Bash(curl -s 'https://orphftlwdwuvoscizndx.supabase.co/rest/v1/songs?select=id,title,singer,start_seconds,end_seconds&bvid=eq.BV11LAbz1Eup&order=id.asc' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ycGhmdGx3ZHd1dm9zY2l6bmR4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTkyNDA4OSwiZXhwIjoyMDk3NTAwMDg5fQ.jDg11vKVIkCYsFPN5T6aLdU08cRx-FXSeZVfRJmi4mo' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ycGhmdGx3ZHd1dm9zY2l6bmR4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTkyNDA4OSwiZXhwIjoyMDk3NTAwMDg5fQ.jDg11vKVIkCYsFPN5T6aLdU08cRx-FXSeZVfRJmi4mo')",
+      "Bash(curl -s 'https://orphftlwdwuvoscizndx.supabase.co/rest/v1/songs?select=id,title,lrc_text&limit=3' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ycGhmdGx3ZHd1dm9zY2l6bmR4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTkyNDA4OSwiZXhwIjoyMDk3NTAwMDg5fQ.jDg11vKVIkCYsFPN5T6aLdU08cRx-FXSeZVfRJmi4mo' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ycGhmdGx3ZHd1dm9zY2l6bmR4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTkyNDA4OSwiZXhwIjoyMDk3NTAwMDg5fQ.jDg11vKVIkCYsFPN5T6aLdU08cRx-FXSeZVfRJmi4mo')",
+      "Bash(curl -s 'https://orphftlwdwuvoscizndx.supabase.co/rest/v1/songs?select=id,title&limit=1' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ycGhmdGx3ZHd1dm9zY2l6bmR4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTkyNDA4OSwiZXhwIjoyMDk3NTAwMDg5fQ.jDg11vKVIkCYsFPN5T6aLdU08cRx-FXSeZVfRJmi4mo' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ycGhmdGx3ZHd1dm9zY2l6bmR4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTkyNDA4OSwiZXhwIjoyMDk3NTAwMDg5fQ.jDg11vKVIkCYsFPN5T6aLdU08cRx-FXSeZVfRJmi4mo')",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //F //PID 9280)",
+      "Bash(/d/softwa/nodejs/node server.js)",
+      "Bash(curl -s \"http://localhost:8765/api/lyrics/1\")",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS: %{http_code}\\\\n\" \"http://localhost:8765/api/lyrics/99999\")"
+    ]
+  }
+}
