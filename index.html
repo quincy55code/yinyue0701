@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>🎵 青春旋律 — 音乐播放器</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎵</text></svg>">
 </head>
@@ -50,8 +53,25 @@
         </aside>
     </main>
 
-    <!-- ====== 底部播放栏 ====== -->
+    <!-- ====== 底部播放栏（单行） ====== -->
     <footer class="player-bar" id="playerBar">
+        <!-- 当前播放信息 -->
+        <div class="player-info">
+            <span class="now-playing-label">
+                <span class="dot" id="nowPlayingDot" style="display:none"></span>
+            </span>
+            <span class="now-playing-title" id="nowPlayingTitle">未在播放</span>
+        </div>
+
+        <!-- 播放控件 -->
+        <div class="controls-row">
+            <button class="btn-mode btn-ctrl loop-all" id="btnMode" title="列表循环">🔁</button>
+            <button class="btn-ctrl" id="btnPrev" title="上一首">⏮</button>
+            <button class="btn-ctrl play-btn" id="btnPlay" title="播放/暂停">▶</button>
+            <button class="btn-ctrl" id="btnNext" title="下一首">⏭</button>
+            <button class="btn-ctrl" id="btnLyrics" title="歌词">🎤</button>
+        </div>
+
         <!-- 进度条 -->
         <div class="progress-row">
             <span class="progress-time" id="timeCurrent">0:00</span>
@@ -60,25 +80,15 @@
             </div>
             <span class="progress-time" id="timeTotal">0:00</span>
         </div>
-
-        <!-- 控件 -->
-        <div class="controls-row" style="position:relative">
-            <!-- 当前播放信息 -->
-            <div class="player-info">
-                <span class="now-playing-label">
-                    <span class="dot" id="nowPlayingDot" style="display:none"></span>
-                </span>
-                <span class="now-playing-title" id="nowPlayingTitle">未在播放</span>
-            </div>
-
-            <button class="btn-ctrl" id="btnLyrics" title="歌词">🎤</button>
-            <button class="btn-mode btn-ctrl loop-all" id="btnMode" title="列表循环">🔁</button>
-            <button class="btn-ctrl" id="btnPrev" title="上一首">⏮</button>
-            <button class="btn-ctrl play-btn" id="btnPlay" title="播放/暂停">▶</button>
-            <button class="btn-ctrl" id="btnNext" title="下一首">⏭</button>
-            <div style="width:36px"></div> <!-- 占位保持居中 -->
-        </div>
     </footer>
+
+    <!-- ====== 平板底部抽屉 ====== -->
+    <div class="drawer-overlay" id="drawerOverlay"></div>
+    <div class="drawer-sheet" id="drawerSheet">
+        <div class="drawer-handle"></div>
+        <div class="drawer-content" id="drawerContent"></div>
+    </div>
+    <button class="fab-drawer-trigger" id="fabDrawer" title="收藏 & 歌单">⭐</button>
 
     <!-- ====== Modal ====== -->
     <div class="modal-overlay" id="modalOverlay">
