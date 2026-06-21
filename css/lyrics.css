@@ -88,7 +88,7 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: color var(--transition), background var(--transition);
+    transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
     flex-shrink: 0;
 }
 
