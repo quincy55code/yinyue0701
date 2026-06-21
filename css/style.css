@@ -666,46 +666,50 @@ body {
 /* ---------- Player Bar ---------- */
 .player-bar {
     flex-shrink: 0;
-    background: var(--bg-player);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border-top: 1px solid rgba(237, 228, 218, 0.6);
-    padding: 12px 24px 16px;
+    background: rgba(20, 20, 22, 0.82);
+    backdrop-filter: blur(24px) saturate(1.2);
+    -webkit-backdrop-filter: blur(24px) saturate(1.2);
+    border-top: 1px solid var(--border-subtle);
+    padding: var(--space-sm) var(--space-xl) var(--space-md);
     display: flex;
-    flex-direction: column;
-    gap: 8px;
-    box-shadow: 0 -2px 20px rgba(74, 63, 59, 0.06);
+    align-items: center;
+    gap: var(--space-lg);
 }
 
-/* Progress */
+/* Progress — 在播放栏顶部 */
 .progress-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-sm);
+    flex: 1;
 }
 
 .progress-time {
     font-size: 11px;
     color: var(--text-tertiary);
-    width: 40px;
+    width: 36px;
     text-align: center;
     font-variant-numeric: tabular-nums;
     flex-shrink: 0;
+    font-family: var(--font-mono);
 }
 
 .progress-bar-wrap {
     flex: 1;
-    height: 6px;
-    background: var(--border-subtle);
-    border-radius: 3px;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
     cursor: pointer;
     position: relative;
+    transition: height var(--duration-fast) var(--ease-out);
 }
+
+.progress-bar-wrap:hover { height: 6px; }
 
 .progress-bar-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--accent), #f0b27a);
-    border-radius: 3px;
+    background: var(--accent);
+    border-radius: 2px;
     width: 0%;
     transition: width 0.1s linear;
     position: relative;
@@ -714,110 +718,114 @@ body {
 .progress-bar-fill::after {
     content: '';
     position: absolute;
-    right: -6px;
+    right: -5px;
     top: 50%;
     transform: translateY(-50%);
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     background: #fff;
     border: 2px solid var(--accent);
     border-radius: 50%;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
-    opacity: 0;
-    transition: opacity var(--duration-fast) var(--ease-out);
+    opacity: 1;
+    transition: transform var(--duration-fast) var(--ease-spring);
 }
 
 .progress-bar-wrap:hover .progress-bar-fill::after {
-    opacity: 1;
+    transform: translateY(-50%) scale(1.25);
 }
 
 /* Controls */
 .controls-row {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 20px;
+    gap: var(--space-md);
+    flex-shrink: 0;
 }
 
 .btn-ctrl {
-    width: 40px;
-    height: 40px;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    font-size: 22px;
-    border-radius: var(--radius-full);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: transform var(--duration-fast) var(--ease-spring), color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
-    color: var(--text-primary);
-}
-
-.btn-ctrl:hover {
-    transform: scale(1.1);
-    color: var(--accent);
-}
-
-.btn-ctrl.play-btn {
-    width: 52px;
-    height: 52px;
-    font-size: 28px;
-    background: var(--accent);
-    color: #fff;
-    box-shadow: 0 4px 16px rgba(232, 145, 123, 0.35);
-}
-
-.btn-ctrl.play-btn:hover {
-    background: var(--accent-hover);
-    transform: scale(1.08);
-}
-
-/* Mode Toggle */
-.btn-mode {
     width: 36px;
     height: 36px;
     border: none;
     background: transparent;
     cursor: pointer;
-    font-size: 16px;
+    font-size: 20px;
+    border-radius: var(--radius-full);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform var(--duration-fast) var(--ease-spring),
+                color var(--duration-fast) var(--ease-out);
+    color: var(--text-secondary);
+}
+
+.btn-ctrl:hover {
+    transform: scale(1.1);
+    color: var(--text-primary);
+}
+
+.btn-ctrl.play-btn {
+    width: 48px;
+    height: 48px;
+    font-size: 24px;
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 4px 16px rgba(165, 160, 240, 0.3);
+}
+
+.btn-ctrl.play-btn:hover {
+    background: var(--accent-hover);
+    transform: scale(1.08);
+    box-shadow: 0 4px 24px rgba(165, 160, 240, 0.45);
+}
+
+.btn-ctrl.play-btn:active { transform: scale(0.94); }
+
+/* Mode Toggle */
+.btn-mode {
+    width: 34px;
+    height: 34px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 14px;
     border-radius: var(--radius-full);
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--text-secondary);
-    transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+    transition: color var(--duration-fast) var(--ease-out),
+                background var(--duration-fast) var(--ease-out);
     position: relative;
     font-weight: 700;
+    font-family: var(--font-sans);
 }
 
 .btn-mode:hover {
     color: var(--accent);
-    background: var(--bg-surface);
+    background: var(--bg-hover);
 }
 
 .btn-mode.loop-all { color: var(--text-secondary); }
 .btn-mode.loop-single { color: var(--accent); }
 .btn-mode.shuffle { color: var(--accent); }
 
-/* Single-loop indicator */
 .btn-mode.loop-single::after {
     content: '1';
     position: absolute;
-    font-size: 9px;
+    font-size: 8px;
     font-weight: 700;
-    bottom: 4px;
-    right: 6px;
+    bottom: 5px;
+    right: 7px;
 }
 
-/* Current song info */
+/* Current song info — 在播放栏左侧 */
 .player-info {
     display: flex;
     align-items: center;
-    gap: 10px;
-    position: absolute;
-    left: 24px;
-    bottom: 28px;
+    gap: var(--space-sm);
+    flex-shrink: 0;
+    min-width: 140px;
+    max-width: 240px;
 }
 
 .now-playing-label {
@@ -826,26 +834,26 @@ body {
     display: flex;
     align-items: center;
     gap: 4px;
+    flex-shrink: 0;
 }
 
 .now-playing-label .dot {
     width: 6px;
     height: 6px;
-    background: #4caf50;
+    background: #4ade80;
     border-radius: 50%;
-    animation: pulse-dot 1.5s ease-in-out infinite;
+    animation: pulseDot 1.5s var(--ease-in-out) infinite;
 }
 
-@keyframes pulse-dot {
+@keyframes pulseDot {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.35; }
+    50%      { opacity: 0.35; }
 }
 
 .now-playing-title {
     font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
-    max-width: 200px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1002,10 +1010,6 @@ body {
         width: 46px;
         height: 46px;
         font-size: 24px;
-    }
-    .player-info {
-        position: static;
-        margin-bottom: 4px;
     }
 }
 
