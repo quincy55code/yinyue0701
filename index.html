@@ -12,81 +12,201 @@
 </head>
 <body>
 
-    <!-- ====== 顶部标题栏 ====== -->
-    <header class="app-header">
-        <div class="app-logo">
-            <div class="icon">🎵</div>
-            <h1>青春旋律</h1>
+    <!-- ====== 整体布局容器 ====== -->
+    <div class="app-layout">
+
+        <!-- ====== 侧边栏 ====== -->
+        <nav class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <svg class="sidebar-logo-svg" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="36" height="36" rx="10" fill="url(#logoGrad)"/>
+                    <path d="M13 24V14l9-1.3v8" stroke="#0B0E0C" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                    <circle cx="11.5" cy="22.5" r="2.2" fill="#0B0E0C"/>
+                    <circle cx="20.5" cy="19" r="2.2" fill="#0B0E0C"/>
+                    <defs>
+                        <linearGradient id="logoGrad" x1="0" y1="0" x2="36" y2="36">
+                            <stop offset="0%" stop-color="#4DB88D"/>
+                            <stop offset="100%" stop-color="#319F6A"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+                <span class="sidebar-title">青春旋律</span>
+            </div>
+
+            <div class="sidebar-nav" id="sidebarNav">
+                <button class="sidebar-item active" data-nav="home" data-action="nav-home">
+                    <span class="sidebar-item-icon">🏠</span>
+                    <span class="sidebar-item-label">首页</span>
+                </button>
+                <button class="sidebar-item" data-nav="tags" data-action="nav-tags">
+                    <span class="sidebar-item-icon">🏷️</span>
+                    <span class="sidebar-item-label">分类浏览</span>
+                </button>
+                <button class="sidebar-item" data-nav="collection" data-action="nav-collection">
+                    <span class="sidebar-item-icon">📊</span>
+                    <span class="sidebar-item-label">歌曲汇总</span>
+                </button>
+                <button class="sidebar-item" data-nav="favorites" data-action="nav-favorites">
+                    <span class="sidebar-item-icon">⭐</span>
+                    <span class="sidebar-item-label">我的收藏</span>
+                    <span class="sidebar-badge" id="sidebarFavCount" style="display:none">0</span>
+                </button>
+                <button class="sidebar-item" data-nav="playlists" data-action="nav-playlists">
+                    <span class="sidebar-item-icon">📋</span>
+                    <span class="sidebar-item-label">我的歌单</span>
+                </button>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="sidebar-section-label">热门标签</div>
+            <div class="sidebar-tags" id="sidebarTags">
+                <!-- 动态填充热门标签快捷入口 -->
+            </div>
+
+            <div class="sidebar-spacer"></div>
+
+            <div class="sidebar-user" id="sidebarUser">
+                <button class="btn-login" id="btnLogin" data-action="show-auth">👤 登录</button>
+                <div class="user-menu-wrap" id="userMenuWrap" style="display:none">
+                    <button class="btn-user" id="btnUser" data-action="toggle-user-menu">
+                        <span id="btnUserLabel">用户</span>
+                    </button>
+                    <div class="user-dropdown" id="userDropdown" style="display:none">
+                        <div class="user-dropdown-item" data-action="logout">退出登录</div>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- ====== 主内容区 ====== -->
+        <div class="content-wrapper">
+            <!-- 顶部栏 -->
+            <header class="top-bar" id="topBar">
+                <button class="btn-menu" id="btnMenu" data-action="toggle-sidebar" aria-label="菜单">☰</button>
+                <div class="search-wrap" id="searchWrap">
+                    <input type="text" class="search-input" id="searchInput" placeholder="🔍 搜索歌曲、歌手…" autocomplete="off">
+                    <button class="search-clear" id="searchClear" style="display:none">✕</button>
+                    <div class="search-history-dropdown" id="searchDropdown" style="display:none"></div>
+                </div>
+                <div class="top-bar-spacer"></div>
+            </header>
+
+            <!-- 内容视图 -->
+            <main class="content-area" id="contentArea">
+                <div class="view-header" id="viewHeader" style="display:none">
+                    <button class="btn-back" id="btnBack" data-action="nav-back">← 返回</button>
+                    <span class="view-title" id="viewTitle"></span>
+                </div>
+                <div class="section-header" id="sectionHeader">🎵 音乐分类</div>
+                <div class="view-container" id="viewContainer">
+                    <!-- 动态渲染：标签卡片网格 / 歌曲封面网格 / 歌曲列表 / 收藏 / 歌单 -->
+                </div>
+            </main>
+
         </div>
-        <div class="header-left" style="font-size:13px;color:var(--text-tertiary)">那些年，我们一起听的歌</div>
-        <div class="header-right"></div>
-    </header>
 
-    <!-- ====== 主内容区 ====== -->
-    <main class="app-main">
-        <!-- 左侧：主视图区域 -->
-        <section class="song-list-panel">
-            <div class="view-header" id="viewHeader" style="display:none">
-                <button class="btn-back" id="btnBack" title="返回">← 返回</button>
-                <span class="view-title" id="viewTitle"></span>
+        <!-- ====== 沉浸式 Now Playing 层 ====== -->
+        <div class="now-playing-overlay" id="nowPlayingOverlay" style="display:none">
+            <div class="npo-backdrop" id="npoBackdrop"></div>
+            <button class="npo-close" id="npoClose" data-action="close-now-playing">←</button>
+            <div class="npo-content">
+                <div class="npo-cover-wrap">
+                    <img class="npo-cover" id="npoCover" src="" alt="">
+                </div>
+                <div class="npo-info">
+                    <h2 class="npo-title" id="npoTitle"></h2>
+                    <p class="npo-singer" id="npoSinger"></p>
+                </div>
+                <div class="npo-progress">
+                    <span class="progress-time" id="npoTimeCurrent">0:00</span>
+                    <div class="progress-bar-wrap" id="npoProgressWrap">
+                        <div class="progress-bar-fill" id="npoProgressFill"></div>
+                    </div>
+                    <span class="progress-time" id="npoTimeTotal">0:00</span>
+                </div>
+                <div class="npo-controls">
+                    <button class="btn-ctrl npo-btn" id="npoBtnPrev" data-action="prev">⏮</button>
+                    <button class="btn-ctrl npo-play-btn" id="npoBtnPlay" data-action="toggle-play">▶</button>
+                    <button class="btn-ctrl npo-btn" id="npoBtnNext" data-action="next">⏭</button>
+                </div>
+                <div class="npo-actions">
+                    <button class="npo-action-btn" id="npoBtnFav" data-action="toggle-fav">♡ 收藏</button>
+                    <button class="npo-action-btn" id="npoBtnAddPl" data-action="show-add-to-playlist">📋 添加到歌单</button>
+                </div>
             </div>
-            <div class="section-header" id="sectionHeader">🎵 音乐分类</div>
-            <div class="search-wrap">
-                <input type="text" class="search-input" id="searchInput" placeholder="🔍 搜索歌曲、歌手…" autocomplete="off">
-                <button class="search-clear" id="searchClear" style="display:none">✕</button>
-            </div>
-            <div class="view-container" id="viewContainer">
-                <!-- 动态渲染：标签卡片网格 / 歌曲列表 / 明星子卡片 -->
-            </div>
-        </section>
-
-        <!-- 右侧面板 -->
-        <aside class="right-panel">
-            <div class="panel-tabs">
-                <button class="panel-tab active" id="tabFav">⭐ 收藏</button>
-                <button class="panel-tab" id="tabPl">📋 歌单</button>
-            </div>
-            <div class="panel-content" id="panelContent">
-                <div id="panelFav"><!-- 收藏列表 --></div>
-                <div id="panelPl" style="display:none"><!-- 歌单列表 --></div>
-            </div>
-        </aside>
-    </main>
-
-    <!-- ====== 底部播放栏（单行） ====== -->
-    <footer class="player-bar" id="playerBar">
-        <!-- 当前播放信息 -->
-        <div class="player-info">
-            <span class="now-playing-label">
-                <span class="dot" id="nowPlayingDot" style="display:none"></span>
-            </span>
-            <span class="now-playing-title" id="nowPlayingTitle">未在播放</span>
         </div>
 
-        <!-- 播放控件 -->
-        <div class="controls-row">
-            <button class="btn-mode btn-ctrl loop-all" id="btnMode" title="列表循环">🔁</button>
-            <button class="btn-ctrl" id="btnPrev" title="上一首">⏮</button>
-            <button class="btn-ctrl play-btn" id="btnPlay" title="播放/暂停">▶</button>
-            <button class="btn-ctrl" id="btnNext" title="下一首">⏭</button>
-            <button class="btn-ctrl" id="btnLyrics" title="歌词">🎤</button>
+        <!-- ====== 底部播放栏 ====== -->
+        <footer class="player-bar" id="playerBar">
+            <div class="player-now" id="playerNow">
+                <div class="player-cover-wrap" id="playerCoverWrap" data-action="open-now-playing">
+                    <img class="player-cover" id="playerCover" src="" alt="" style="display:none">
+                    <span class="player-cover-placeholder" id="playerCoverPH">🎵</span>
+                </div>
+                <div class="player-meta">
+                    <span class="player-title" id="nowPlayingTitle">未在播放</span>
+                    <span class="player-singer" id="nowPlayingSinger"></span>
+                </div>
+            </div>
+
+            <div class="player-center">
+                <div class="player-controls">
+                    <button class="btn-ctrl btn-mode loop-all" id="btnMode" title="列表循环" data-action="toggle-mode">🔁</button>
+                    <button class="btn-ctrl" id="btnPrev" data-action="prev">⏮</button>
+                    <button class="btn-ctrl play-btn" id="btnPlay" data-action="toggle-play">▶</button>
+                    <button class="btn-ctrl" id="btnNext" data-action="next">⏭</button>
+                    <button class="btn-ctrl btn-lyrics-text" id="btnLyrics" data-action="open-lyrics" title="歌词">歌词</button>
+                </div>
+                <div class="player-progress">
+                    <span class="progress-time" id="timeCurrent">0:00</span>
+                    <div class="progress-bar-wrap" id="progressWrap">
+                        <div class="progress-bar-fill" id="progressFill"></div>
+                    </div>
+                    <span class="progress-time" id="timeTotal">0:00</span>
+                </div>
+            </div>
+
+            <div class="player-right">
+                <button class="btn-ctrl btn-volume" id="btnVolume" data-action="toggle-volume" title="音量">🔊</button>
+                <div class="volume-popup" id="volumePopup" style="display:none">
+                    <input type="range" class="volume-slider" id="volumeSlider" min="0" max="100" value="80" orient="vertical">
+                </div>
+            </div>
+        </footer>
+
+        <!-- ====== 嵌入式歌词面板 ====== -->
+        <div class="lyrics-panel" id="lyricsPanel">
+            <div class="lyrics-panel-header">
+                <div class="lyrics-panel-song-info">
+                    <span class="lyrics-panel-title" id="embeddedLyricsTitle">歌词</span>
+                    <span class="lyrics-panel-singer" id="embeddedLyricsSinger"></span>
+                </div>
+                <button class="lyrics-panel-btn" id="btnLyricsPopout" title="弹出独立窗口">↗</button>
+                <button class="lyrics-panel-btn" id="btnLyricsClose" title="关闭歌词面板">✕</button>
+            </div>
+            <div class="lyrics-panel-body" id="lyricsPanelBody">
+                <div class="lyrics-empty">
+                    <div class="empty-icon">🎵</div>
+                    <div>等待播放...</div>
+                </div>
+            </div>
         </div>
 
-        <!-- 进度条 -->
-        <div class="progress-row">
-            <span class="progress-time" id="timeCurrent">0:00</span>
-            <div class="progress-bar-wrap" id="progressWrap">
-                <div class="progress-bar-fill" id="progressFill"></div>
-            </div>
-            <span class="progress-time" id="timeTotal">0:00</span>
-        </div>
-    </footer>
+    </div><!-- /app-layout -->
 
     <!-- ====== 平板底部抽屉 ====== -->
     <div class="drawer-overlay" id="drawerOverlay"></div>
     <div class="drawer-sheet" id="drawerSheet">
         <div class="drawer-handle"></div>
-        <div class="drawer-content" id="drawerContent"></div>
+        <div class="drawer-content" id="drawerContent">
+            <div class="drawer-tabs">
+                <button class="drawer-tab active" data-drawer-tab="fav">⭐ 收藏</button>
+                <button class="drawer-tab" data-drawer-tab="pl">📋 歌单</button>
+            </div>
+            <div class="drawer-panel" id="drawerFav"><!-- 收藏列表 --></div>
+            <div class="drawer-panel" id="drawerPl" style="display:none"><!-- 歌单列表 --></div>
+        </div>
     </div>
     <button class="fab-drawer-trigger" id="fabDrawer" title="收藏 & 歌单" aria-label="收藏和歌单">⭐</button>
 
@@ -122,7 +242,7 @@
                     <div class="empty-state" style="padding:60px 20px">
                         <span class="empty-icon">⚠️</span>
                         无法连接后端服务<br>
-                        <small>请确保已启动后端服务 (node server.js)</small>
+                        <small style="color:var(--text-tertiary)">请确保已启动后端服务 (node server.js)</small>
                     </div>`;
             }
         })();
