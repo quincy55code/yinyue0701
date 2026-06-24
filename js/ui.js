@@ -1545,14 +1545,14 @@ const UI = (() => {
 
             if (state === 'email') {
                 // ===== 状态 1: 输入邮箱 =====
-                title = '\u{1F464} 登录 / 注册';
+                title = '👤 登录 / 注册';
                 fields = `
                     <input class="modal-input" id="authEmail" type="email" placeholder="请输入邮箱地址" autocomplete="email" value="${escapeHtml(email)}">
                     <div class="auth-error" id="authError" style="display:none"></div>`;
                 btnText = '继续';
             } else if (state === 'password') {
                 // ===== 状态 2: 已有账号 → 输入密码 =====
-                title = '\u{1F511} 登录';
+                title = '🔑 登录';
                 fields = `
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;color:var(--text-secondary)">
                         <span style="cursor:pointer;color:var(--accent)" data-action="auth-back">← 返回</span>
@@ -1566,7 +1566,7 @@ const UI = (() => {
                 btnText = '登录';
             } else {
                 // ===== 状态 3: 注册 / 验证码登录 =====
-                title = isNewUser ? '✨ 创建账号' : '\u{1F511} 登录';
+                title = isNewUser ? '✨ 创建账号' : '🔑 登录';
                 const hint = `验证码已发送至 <strong>${escapeHtml(email)}</strong>`;
 
                 const passwordField = isNewUser
