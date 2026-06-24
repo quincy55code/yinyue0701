@@ -237,9 +237,10 @@ app.get('/api/songs', async (req, res) => {
         }
 
         const songs = (data || []).map(formatSong).filter(Boolean);
-        const songsWithTags = await attachTags(songs);
+        const withTags = req.query.withTags !== 'false';  // default true
+        const result = withTags ? await attachTags(songs) : songs;
 
-        res.json(songsWithTags);
+        res.json(result);
     } catch (err) {
         console.error('[songs]', err.message);
         res.status(500).json({ error: '获取歌曲列表失败' });
@@ -448,6 +449,7 @@ app.get('/api/collections', async (_req, res) => {
             };
         });
 
+        res.set('Cache-Control', 'private, max-age=300');
         res.json({ collections });
     } catch (err) {
         console.error('[collections]', err.message);

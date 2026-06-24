@@ -392,7 +392,7 @@ const UI = (() => {
         $.viewContainer.innerHTML = renderSkeletonCoverGrid(6);
 
         try {
-            const resp = await fetch(`/api/songs?bvid=${encodeURIComponent(bvid)}&limit=300`);
+            const resp = await fetch(`/api/songs?bvid=${encodeURIComponent(bvid)}&limit=300&withTags=false`);
             if (!resp.ok) throw new Error('加载失败');
             const songs = await resp.json();
             if (!songs || !songs.length) {
