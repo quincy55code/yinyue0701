@@ -127,7 +127,72 @@ const Auth = (() => {
         }
 
         saveSession(data.session, data.user);
-        return data.user;
+        return data;
+    }
+
+    /** 检查邮箱是否已注册（用于 email-first 流程） */
+    async function checkEmail(email) {
+        const resp = await fetch('/api/auth/check-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email }),
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.error || '查询失败');
+        }
+        return data;
+    }
+
+    /** 注册新用户：验证码 + 密码一步完成 */
+    async function register(email, code, password) {
+        const resp = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, code, password, mode: 'register' }),
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.error || '注册失败');
+        }
+
+        saveSession(data.session, data.user);
+        return data;
+    }
+
+    /** 密码登录 */
+    async function loginWithPassword(email, password) {
+        const resp = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.error || '登录失败');
+        }
+
+        saveSession(data.session, data.user);
+        return data;
+    }
+
+    /** 设置密码（首次注册后或忘记密码后） */
+    async function setPassword(password) {
+        const resp = await fetch('/api/auth/set-password', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ password }),
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.error || '设置密码失败');
+        }
+
+        return data;
     }
 
     /** 登出 */
@@ -197,6 +262,10 @@ const Auth = (() => {
         getToken,
         sendCode,
         verifyCode,
+        checkEmail,
+        register,
+        loginWithPassword,
+        setPassword,
         updateProfile,
         uploadAvatar,
         logout,
