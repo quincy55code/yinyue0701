@@ -245,26 +245,22 @@ const UI = (() => {
         return `background-image: url('/public/images/tags/${slug}.jpg')`;
     }
 
-    // 全部可用背景图 slug 池
-    const ALL_BG_SLUGS = [
-        '热门', '流行', '华语', '粤语', '古风', '民谣',
-        '轻音乐', '经典', '一人一首成名曲', '治愈',
-    ];
-
-    // 父分类 slug → 对应背景图 slug（与 getCollectionBgStyle 保持一致）
-    const PARENT_SLUG_MAP = {
-        '热歌榜单': '热门', 'KTV必点': '流行', '华语流行': '华语',
-        '欧美音乐': '流行', '粤语经典': '粤语', '古风国风': '古风',
-        '民谣': '民谣', '纯音乐': '轻音乐', '经典怀旧': '经典',
-        '网络神曲': '流行', '歌手专区': '一人一首成名曲', '主题歌单': '治愈',
-    };
-
     function getCollectionItemBgStyle(parentName, index) {
-        // 排除父分类使用的图片，确保父子不同图
-        const parentSlug = PARENT_SLUG_MAP[parentName] || null;
-        const pool = ALL_BG_SLUGS.filter(s => s !== parentSlug);
-        const slug = pool[index % pool.length];
-        return `background-image: url('/public/images/tags/${slug}.jpg')`;
+        // 基于 (父分类名, 索引) 生成唯一哈希 → HSL 渐变
+        // 保证任意两张子目录卡片的背景色都不同（跨分类也不重复）
+        const key = parentName + '::' + index;
+        let hash = 0;
+        for (let i = 0; i < key.length; i++) {
+            hash = ((hash << 5) - hash) + key.charCodeAt(i);
+            hash |= 0;
+        }
+        const h1 = Math.abs(hash) % 360;
+        const h2 = (h1 + 40 + (Math.abs(hash >> 8) % 60)) % 360;
+        const s1 = 35 + (Math.abs(hash >> 10) % 25);
+        const s2 = 40 + (Math.abs(hash >> 14) % 25);
+        const l1 = 22 + (Math.abs(hash >> 18) % 12);
+        const l2 = 12 + (Math.abs(hash >> 22) % 10);
+        return `background: linear-gradient(135deg, hsl(${h1}, ${s1}%, ${l1}%) 0%, hsl(${h2}, ${s2}%, ${l2}%) 100%)`;
     }
 
     // ========== 骨架屏 HTML 生成器 ==========
@@ -314,7 +310,7 @@ const UI = (() => {
             const action = hasBvid ? 'navigate-collection-songs' : '';
             const bgColor = getCoverFallbackColor(i);
             const bgStyle = hasBvid
-                ? `${getCollectionItemBgStyle(collectionName, i)};background-size:cover;background-position:center`
+                ? getCollectionItemBgStyle(collectionName, i)
                 : '';
             html += `
             <div class="tag-card tag-card--image ${!hasBvid ? 'tag-card--empty' : ''}" style="--tag-color:${bgColor};--stagger-index:${Math.min(i, 19)};${bgStyle}" data-action="${action}" data-bvid="${escapeHtml(it.bvid || '')}" data-item-title="${escapeHtml(it.title)}">
