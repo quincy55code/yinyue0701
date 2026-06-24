@@ -245,14 +245,25 @@ const UI = (() => {
         return `background-image: url('/public/images/tags/${slug}.jpg')`;
     }
 
-    // 子分类卡片背景图池 — 按索引轮换，保证每个子项图片都不一样
-    const COLLECTION_ITEM_BG_POOL = [
+    // 全部可用背景图 slug 池
+    const ALL_BG_SLUGS = [
         '热门', '流行', '华语', '粤语', '古风', '民谣',
         '轻音乐', '经典', '一人一首成名曲', '治愈',
     ];
 
-    function getCollectionItemBgStyle(index) {
-        const slug = COLLECTION_ITEM_BG_POOL[index % COLLECTION_ITEM_BG_POOL.length];
+    // 父分类 slug → 对应背景图 slug（与 getCollectionBgStyle 保持一致）
+    const PARENT_SLUG_MAP = {
+        '热歌榜单': '热门', 'KTV必点': '流行', '华语流行': '华语',
+        '欧美音乐': '流行', '粤语经典': '粤语', '古风国风': '古风',
+        '民谣': '民谣', '纯音乐': '轻音乐', '经典怀旧': '经典',
+        '网络神曲': '流行', '歌手专区': '一人一首成名曲', '主题歌单': '治愈',
+    };
+
+    function getCollectionItemBgStyle(parentName, index) {
+        // 排除父分类使用的图片，确保父子不同图
+        const parentSlug = PARENT_SLUG_MAP[parentName] || null;
+        const pool = ALL_BG_SLUGS.filter(s => s !== parentSlug);
+        const slug = pool[index % pool.length];
         return `background-image: url('/public/images/tags/${slug}.jpg')`;
     }
 
@@ -303,7 +314,7 @@ const UI = (() => {
             const action = hasBvid ? 'navigate-collection-songs' : '';
             const bgColor = getCoverFallbackColor(i);
             const bgStyle = hasBvid
-                ? `${getCollectionItemBgStyle(i)};background-size:cover;background-position:center`
+                ? `${getCollectionItemBgStyle(collectionName, i)};background-size:cover;background-position:center`
                 : '';
             html += `
             <div class="tag-card tag-card--image ${!hasBvid ? 'tag-card--empty' : ''}" style="--tag-color:${bgColor};--stagger-index:${Math.min(i, 19)};${bgStyle}" data-action="${action}" data-bvid="${escapeHtml(it.bvid || '')}" data-item-title="${escapeHtml(it.title)}">
