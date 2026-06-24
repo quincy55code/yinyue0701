@@ -99,34 +99,31 @@ const Auth = (() => {
         }
     }
 
-    /** 登录 */
-    async function login(email, password) {
+    /** 发送邮箱验证码 */
+    async function sendCode(email) {
+        const resp = await fetch('/api/auth/send-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email }),
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.error || '发送验证码失败');
+        }
+    }
+
+    /** 验证码登录（新用户自动注册） */
+    async function verifyCode(email, code) {
         const resp = await fetch('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password }),
+            body: JSON.stringify({ email, code }),
         });
 
         const data = await resp.json();
         if (!resp.ok) {
             throw new Error(data.error || '登录失败');
-        }
-
-        saveSession(data.session, data.user);
-        return data.user;
-    }
-
-    /** 注册 */
-    async function signup(email, password, username) {
-        const resp = await fetch('/api/auth/signup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password, username }),
-        });
-
-        const data = await resp.json();
-        if (!resp.ok) {
-            throw new Error(data.error || '注册失败');
         }
 
         saveSession(data.session, data.user);
@@ -146,13 +143,62 @@ const Auth = (() => {
         clearSession();
     }
 
+    /** 修改用户名 */
+    async function updateProfile(updates) {
+        const resp = await fetch('/api/auth/profile', {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(updates),
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.error || '修改失败');
+        }
+
+        _user = data.user;
+        try { localStorage.setItem(USER_KEY, JSON.stringify(_user)); } catch (e) {}
+        notify();
+        return _user;
+    }
+
+    /** 上传头像 */
+    async function uploadAvatar(file) {
+        // 读取文件为 base64
+        const base64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('读取文件失败'));
+            reader.readAsDataURL(file);
+        });
+
+        const resp = await fetch('/api/auth/avatar', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ avatar_base64: base64 }),
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.error || '上传失败');
+        }
+
+        // 更新本地缓存
+        _user.avatar_url = data.avatar_url;
+        try { localStorage.setItem(USER_KEY, JSON.stringify(_user)); } catch (e) {}
+        notify();
+        return data.avatar_url;
+    }
+
     return {
         init,
         isLoggedIn,
         getUser,
         getToken,
-        login,
-        signup,
+        sendCode,
+        verifyCode,
+        updateProfile,
+        uploadAvatar,
         logout,
         onChange,
         getAuthHeaders, // 占位，上面会覆盖
