@@ -238,14 +238,16 @@ const UI = (() => {
         '经典怀旧': '📻', '网络神曲': '🌐', '歌手专区': '🎙️', '主题歌单': '📋',
     };
 
-    function getCollectionBgStyle(name, seed) {
-        const typeMap = {
-            '热歌榜单': 0, 'KTV必点': 8, '华语流行': 3, '欧美音乐': 10,
-            '粤语经典': 5, '古风国风': 4, '民谣': 7, '纯音乐': 14,
-            '经典怀旧': 2, '网络神曲': 12, '歌手专区': 6, '主题歌单': 1,
+    function getCollectionBgStyle(name) {
+        // 映射 collection 名称 → public/images/tags/ 下的本地图片文件名
+        const slugMap = {
+            '热歌榜单': '热门', 'KTV必点': '流行', '华语流行': '华语',
+            '欧美音乐': '流行', '粤语经典': '粤语', '古风国风': '古风',
+            '民谣': '民谣', '纯音乐': '轻音乐', '经典怀旧': '经典',
+            '网络神曲': '流行', '歌手专区': '一人一首成名曲', '主题歌单': '治愈',
         };
-        const type = typeMap[name] !== undefined ? typeMap[name] : 0;
-        return `background-image: url('https://www.yumus.cn/api/?target=img&brand=360&type=${type}&_=${seed}')`;
+        const slug = slugMap[name] || '热门';
+        return `background-image: url('/public/images/tags/${slug}.jpg')`;
     }
 
     // ========== 骨架屏 HTML 生成器 ==========
@@ -274,7 +276,7 @@ const UI = (() => {
         let html = '<div class="tag-grid">';
         collections.forEach((c, i) => {
             const icon = COLLECTION_ICONS[c.name] || '🎵';
-            const bgStyle = getCollectionBgStyle(c.name, i * 47 + 13);
+            const bgStyle = getCollectionBgStyle(c.name);
             html += `
             <div class="tag-card tag-card--image" style="--tag-color:${getCoverFallbackColor(i)};--stagger-index:${Math.min(i, 19)};${bgStyle};background-size:cover;background-position:center" data-action="navigate-collection-item" data-collection-id="${c.id}">
                 <div class="tag-card-name">${icon} ${escapeHtml(c.name)}</div>
@@ -284,7 +286,7 @@ const UI = (() => {
         return html;
     }
 
-    function renderCollectionItemsGrid(items, collectionName) {
+    function renderCollectionItemsGrid(items, collectionName, collectionSlug) {
         if (!items || !items.length) {
             return `<div class="empty-state"><span class="empty-icon">📋</span>${escapeHtml(collectionName)}暂无子分类</div>`;
         }
@@ -296,7 +298,7 @@ const UI = (() => {
             const action = hasBvid ? 'navigate-collection-songs' : '';
             const bgColor = getCoverFallbackColor(i);
             const bgStyle = hasBvid
-                ? `background-image:url('https://www.yumus.cn/api/?target=img&brand=360&type=${i % 15}&_=${i * 37 + 7}');background-size:cover;background-position:center`
+                ? `${getCollectionBgStyle(collectionName)};background-size:cover;background-position:center`
                 : '';
             html += `
             <div class="tag-card tag-card--image ${!hasBvid ? 'tag-card--empty' : ''}" style="--tag-color:${bgColor};--stagger-index:${Math.min(i, 19)};${bgStyle}" data-action="${action}" data-bvid="${escapeHtml(it.bvid || '')}" data-item-title="${escapeHtml(it.title)}">
@@ -378,7 +380,7 @@ const UI = (() => {
         _currentView = 'collection-items';
         _currentCollectionData = coll;
         updateViewHeader(true, coll.name);
-        $.viewContainer.innerHTML = renderCollectionItemsGrid(coll.items, coll.name);
+        $.viewContainer.innerHTML = renderCollectionItemsGrid(coll.items, coll.name, coll.slug);
     }
 
     async function navigateToCollectionSongs(bvid, title) {
