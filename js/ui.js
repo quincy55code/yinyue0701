@@ -233,16 +233,32 @@ const UI = (() => {
 
     // ========== 歌曲汇总：分类卡片渲染 ==========
 
-    function getCollectionBgStyle(name) {
-        // 映射 collection 名称 → public/images/tags/ 下的本地图片文件名
-        const slugMap = {
-            '热歌榜单': '热门', 'KTV必点': '流行', '华语流行': '华语',
-            '欧美音乐': '流行', '粤语经典': '粤语', '古风国风': '古风',
-            '民谣': '民谣', '纯音乐': '轻音乐', '经典怀旧': '经典',
-            '网络神曲': '流行', '歌手专区': '一人一首成名曲', '主题歌单': '治愈',
-        };
-        const slug = slugMap[name] || '热门';
-        return `background-image: url('/public/images/tags/${slug}.jpg')`;
+    // 所有可用的标签背景图（62张）→ 每次渲染时随机洗牌后分配，保证每张卡片不同
+    const COLLECTION_IMAGE_POOL = [
+        'DJ', '一人一首成名曲', '丝绸', '乐谱', '书店', '光影',
+        '公路', '励志', '华语', '古寺', '古风', '咖啡馆',
+        '城市夜景', '天桥', '小号', '小提琴', '录音棚', '彩虹',
+        '影视', '情歌', '摇滚', '星空', '极光', '棱镜',
+        '民谣', '水墨', '水彩', '沙漠', '油彩', '治愈',
+        '流行', '海浪', '涂鸦', '深空', '湖泊', '瀑布',
+        '烟雾', '热门', '禅意', '秋叶', '竹林', '篝火',
+        '粤语', '纹理', '经典', '耳机', '草原', '萨克斯',
+        '薰衣草', '贝斯', '轻音乐', '迷雾', '隧道', '雨街',
+        '雪山', '霓虹', '青春', '音乐节', '麦克风', '黄昏',
+        '黑胶', '鼓点',
+    ];
+
+    function shuffleArray(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+    }
+
+    function getShuffledImagePool() {
+        const pool = [...COLLECTION_IMAGE_POOL];
+        shuffleArray(pool);
+        return pool;
     }
 
     function getCollectionItemBgStyle(parentName, index) {
@@ -286,9 +302,12 @@ const UI = (() => {
         if (!collections || !collections.length) {
             return '<div class="empty-state"><span class="empty-icon">📊</span>暂无分类</div>';
         }
+        // 每次渲染洗牌图片池 → 每张分类卡片都有不同的高清背景图
+        const imagePool = getShuffledImagePool();
         let html = '<div class="tag-grid">';
         collections.forEach((c, i) => {
-            const bgStyle = getCollectionBgStyle(c.name);
+            const slug = imagePool[i % imagePool.length];
+            const bgStyle = `background-image: url('/public/images/tags/${slug}.jpg')`;
             html += `
             <div class="tag-card tag-card--image" style="--tag-color:${getCoverFallbackColor(i)};--stagger-index:${Math.min(i, 19)};${bgStyle};background-size:cover;background-position:center" data-action="navigate-collection-item" data-collection-id="${c.id}">
                 <div class="tag-card-name">${escapeHtml(c.name)}</div>
@@ -302,6 +321,8 @@ const UI = (() => {
         if (!items || !items.length) {
             return `<div class="empty-state"><span class="empty-icon">📋</span>${escapeHtml(collectionName)}暂无子分类</div>`;
         }
+        // 每次渲染洗牌图片池 → 子目录卡片也使用随机高清背景图
+        const imagePool = getShuffledImagePool();
         let html = '<div class="tag-grid">';
         items.forEach((it, i) => {
             const songCount = (it.song_count || 0) > 0 ? ` · ${it.song_count}首` : '';
@@ -309,8 +330,9 @@ const UI = (() => {
             const hasSongs = it.song_count > 0;
             const action = hasBvid ? 'navigate-collection-songs' : '';
             const bgColor = getCoverFallbackColor(i);
+            const slug = imagePool[i % imagePool.length];
             const bgStyle = hasBvid
-                ? getCollectionItemBgStyle(collectionName, i)
+                ? `background-image: url('/public/images/tags/${slug}.jpg');background-size:cover;background-position:center`
                 : '';
             html += `
             <div class="tag-card tag-card--image ${!hasBvid ? 'tag-card--empty' : ''}" style="--tag-color:${bgColor};--stagger-index:${Math.min(i, 19)};${bgStyle}" data-action="${action}" data-bvid="${escapeHtml(it.bvid || '')}" data-item-title="${escapeHtml(it.title)}">
@@ -1501,11 +1523,16 @@ const UI = (() => {
         });
     }
 
-    // ========== Auth Modal ==========
+    // ========== Auth Modal (Email-First) ==========
+
+    /**
+     * Email-First 登录弹窗
+     * 3 个状态：'email' → 'password'（已有账号）/ 'register'（新用户或验证码登录）
+     */
     function showAuthModal() {
-        let tab = 'code'; // 'code' | 'password'
-        let step = 'email'; // 'email' | 'code' (only for code tab)
+        let state = 'email';    // 'email' | 'password' | 'register'
         let email = '';
+        let isNewUser = false;  // true = 新注册需设密码，false = 已有账号用验证码
         let countdown = 0;
         let cdTimer = null;
 
@@ -1514,47 +1541,54 @@ const UI = (() => {
         }
 
         function render() {
-            const codeActive = tab === 'code' ? 'border-bottom:2px solid var(--accent);color:var(--accent)' : 'color:var(--text-tertiary);cursor:pointer';
-            const pwdActive = tab === 'password' ? 'border-bottom:2px solid var(--accent);color:var(--accent)' : 'color:var(--text-tertiary);cursor:pointer';
+            let fields, btnText, title;
 
-            const tabsHtml = `<div style="display:flex;gap:0;margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.08)">
-                <div data-action="auth-tab-code" style="flex:1;text-align:center;padding:10px 0;font-size:14px;font-weight:500;transition:all 0.2s;${codeActive}">验证码登录</div>
-                <div data-action="auth-tab-password" style="flex:1;text-align:center;padding:10px 0;font-size:14px;font-weight:500;transition:all 0.2s;${pwdActive}">密码登录</div>
-            </div>`;
-
-            let fields;
-            if (tab === 'password') {
+            if (state === 'email') {
+                // ===== 状态 1: 输入邮箱 =====
+                title = '\u{1F464} 登录 / 注册';
                 fields = `
-                    <input class="modal-input" id="authEmail" type="email" placeholder="请输入邮箱" autocomplete="email" value="${escapeHtml(email)}">
-                    <input class="modal-input" id="authPassword" type="password" placeholder="请输入密码" autocomplete="current-password" style="margin-top:8px">
+                    <input class="modal-input" id="authEmail" type="email" placeholder="请输入邮箱地址" autocomplete="email" value="${escapeHtml(email)}">
                     <div class="auth-error" id="authError" style="display:none"></div>`;
-            } else if (step === 'email') {
+                btnText = '继续';
+            } else if (state === 'password') {
+                // ===== 状态 2: 已有账号 → 输入密码 =====
+                title = '\u{1F511} 登录';
                 fields = `
-                    <input class="modal-input" id="authEmail" type="email" placeholder="请输入邮箱" autocomplete="email" value="${escapeHtml(email)}">
-                    <div class="auth-error" id="authError" style="display:none"></div>`;
-            } else {
-                fields = `
-                    <div class="auth-code-sent">验证码已发送至 <strong>${escapeHtml(email)}</strong></div>
-                    <input class="modal-input auth-code-input" id="authCode" type="text" placeholder="请输入6位验证码" maxlength="6" autocomplete="one-time-code" inputmode="numeric">
-                    <div class="auth-error" id="authError" style="display:none"></div>`;
-            }
-            const resendHtml = (tab === 'code' && step === 'code')
-                ? `<div style="margin-top:10px;text-align:center">
-                     <a id="btnResend" style="cursor:pointer;color:var(--accent);font-size:13px;${countdown > 0 ? 'opacity:0.5;pointer-events:none' : ''}">${countdown > 0 ? `重新发送 (${countdown}s)` : '重新发送'}</a>
-                     &nbsp;&nbsp;
-                     <a data-action="auth-back-email" style="cursor:pointer;color:var(--text-tertiary);font-size:13px">← 更换邮箱</a>
-                   </div>`
-                : '';
-
-            let btnText;
-            if (tab === 'password') {
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;color:var(--text-secondary)">
+                        <span style="cursor:pointer;color:var(--accent)" data-action="auth-back">← 返回</span>
+                        <span>${escapeHtml(email)}</span>
+                    </div>
+                    <input class="modal-input" id="authPassword" type="password" placeholder="请输入密码" autocomplete="current-password">
+                    <div class="auth-error" id="authError" style="display:none"></div>
+                    <div style="margin-top:10px;text-align:center">
+                        <a data-action="auth-use-code" style="cursor:pointer;color:var(--accent);font-size:13px">用验证码登录</a>
+                    </div>`;
                 btnText = '登录';
             } else {
-                btnText = step === 'email' ? '发送验证码' : '登录 / 注册';
+                // ===== 状态 3: 注册 / 验证码登录 =====
+                title = isNewUser ? '✨ 创建账号' : '\u{1F511} 登录';
+                const hint = `验证码已发送至 <strong>${escapeHtml(email)}</strong>`;
+
+                const passwordField = isNewUser
+                    ? `<input class="modal-input" id="authPassword" type="password" placeholder="设置密码（至少6位）" autocomplete="new-password" style="margin-top:8px">`
+                    : '';
+
+                fields = `
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;color:var(--text-secondary)">
+                        <span style="cursor:pointer;color:var(--accent)" data-action="auth-back">← 更换邮箱</span>
+                    </div>
+                    <div class="auth-code-sent">${hint}</div>
+                    <input class="modal-input auth-code-input" id="authCode" type="text" placeholder="请输入6位验证码" maxlength="6" autocomplete="one-time-code" inputmode="numeric">
+                    ${passwordField}
+                    <div class="auth-error" id="authError" style="display:none"></div>
+                    <div style="margin-top:10px;text-align:center">
+                        <a id="btnResend" style="cursor:pointer;color:var(--accent);font-size:13px;${countdown > 0 ? 'opacity:0.5;pointer-events:none' : ''}">${countdown > 0 ? `重新发送 (${countdown}s)` : '重新发送'}</a>
+                    </div>`;
+                btnText = isNewUser ? '注册' : '登录';
             }
 
-            showModal('👤 登录 / 注册',
-                `<div class="auth-form">${tabsHtml}${fields}${resendHtml}</div>`,
+            showModal(title,
+                `<div class="auth-form">${fields}</div>`,
                 `<button class="btn btn-secondary" data-action="close-modal">取消</button>
                  <button class="btn btn-primary" id="btnAuthSubmit">${btnText}</button>`
             );
@@ -1562,34 +1596,41 @@ const UI = (() => {
             const errEl = document.getElementById('authError');
             const submitBtn = document.getElementById('btnAuthSubmit');
 
-            // Tab 切换事件
-            const tabCodeEl = document.querySelector('[data-action="auth-tab-code"]');
-            const tabPwdEl = document.querySelector('[data-action="auth-tab-password"]');
-            if (tabCodeEl) {
-                tabCodeEl.addEventListener('click', () => {
-                    if (tab !== 'code') {
-                        tab = 'code';
-                        step = 'email';
-                        email = '';
-                        countdown = 0;
-                        stopCountdown();
-                        render();
-                    }
+            // 返回链接 (password / register state)
+            const backLink = document.querySelector('[data-action="auth-back"]');
+            if (backLink) {
+                backLink.addEventListener('click', () => {
+                    stopCountdown();
+                    state = 'email';
+                    countdown = 0;
+                    isNewUser = false;
+                    render();
                 });
             }
-            if (tabPwdEl) {
-                tabPwdEl.addEventListener('click', () => {
-                    if (tab !== 'password') {
-                        tab = 'password';
-                        step = 'email';
-                        countdown = 0;
-                        stopCountdown();
+
+            // "用验证码登录" 链接 (password state)
+            const useCodeLink = document.querySelector('[data-action="auth-use-code"]');
+            if (useCodeLink) {
+                useCodeLink.addEventListener('click', async () => {
+                    const link = useCodeLink;
+                    link.style.pointerEvents = 'none';
+                    link.textContent = '发送中…';
+                    try {
+                        await Auth.sendCode(email);
+                        isNewUser = false;  // 已有账号，不显示密码框
+                        state = 'register';
+                        countdown = 60;
                         render();
+                        startCountdownUI();
+                    } catch (e) {
+                        link.style.pointerEvents = '';
+                        link.textContent = '用验证码登录';
+                        if (errEl) { errEl.textContent = e.message; errEl.style.display = ''; }
                     }
                 });
             }
 
-            // 绑定重新发送链接 (code tab only)
+            // 重新发送链接 (register state)
             const resendBtn = document.getElementById('btnResend');
             if (resendBtn) {
                 resendBtn.addEventListener('click', async (e) => {
@@ -1621,76 +1662,94 @@ const UI = (() => {
                         resendBtn.textContent = '重新发送';
                         resendBtn.style.opacity = '';
                         resendBtn.style.pointerEvents = '';
-                        if (errEl) {
-                            errEl.textContent = e2.message;
-                            errEl.style.display = '';
-                        }
+                        if (errEl) { errEl.textContent = e2.message; errEl.style.display = ''; }
                     }
                 });
             }
 
+            function startCountdownUI() {
+                stopCountdown();
+                cdTimer = setInterval(() => {
+                    countdown--;
+                    const b = document.getElementById('btnResend');
+                    if (b) {
+                        if (countdown > 0) {
+                            b.textContent = `重新发送 (${countdown}s)`;
+                        } else {
+                            b.textContent = '重新发送';
+                            b.style.opacity = '';
+                            b.style.pointerEvents = '';
+                            stopCountdown();
+                        }
+                    }
+                }, 1000);
+            }
+
+            // 提交按钮
             submitBtn.addEventListener('click', async () => {
                 try {
-                    if (tab === 'password') {
-                        // ===== 密码登录 =====
+                    if (state === 'email') {
+                        // ===== Email → 检查账号 =====
                         email = document.getElementById('authEmail').value.trim();
                         if (!email || !email.includes('@')) {
                             throw new Error('请输入有效的邮箱地址');
                         }
-                        const pwd = document.getElementById('authPassword').value;
-                        if (!pwd) {
-                            throw new Error('请输入密码');
+                        submitBtn.disabled = true;
+                        submitBtn.textContent = '查询中…';
+
+                        const result = await Auth.checkEmail(email);
+
+                        if (result.exists) {
+                            // 已有账号 → 密码登录
+                            state = 'password';
+                            render();
+                        } else {
+                            // 新用户 → 发送验证码 → 注册
+                            isNewUser = true;
+                            submitBtn.textContent = '发送中…';
+                            await Auth.sendCode(email);
+                            state = 'register';
+                            countdown = 60;
+                            render();
+                            startCountdownUI();
                         }
+                    } else if (state === 'password') {
+                        // ===== 密码登录 =====
+                        const pwd = document.getElementById('authPassword').value;
+                        if (!pwd) throw new Error('请输入密码');
                         submitBtn.disabled = true;
                         submitBtn.textContent = '登录中…';
                         await Auth.loginWithPassword(email, pwd);
                         hideModal();
                         updateAuthUI();
                         PlaylistStore.loadFromServer();
-                    } else if (step === 'email') {
-                        // ===== 验证码登录 - 发送验证码 =====
-                        email = document.getElementById('authEmail').value.trim();
-                        if (!email || !email.includes('@')) {
-                            throw new Error('请输入有效的邮箱地址');
-                        }
-                        submitBtn.disabled = true;
-                        submitBtn.textContent = '发送中…';
-                        await Auth.sendCode(email);
-                        // 进入验证码步骤，启动倒计时
-                        step = 'code';
-                        countdown = 60;
-                        render();
-                        cdTimer = setInterval(() => {
-                            countdown--;
-                            const b = document.getElementById('btnResend');
-                            if (b) {
-                                if (countdown > 0) {
-                                    b.textContent = `重新发送 (${countdown}s)`;
-                                } else {
-                                    b.textContent = '重新发送';
-                                    b.style.opacity = '';
-                                    b.style.pointerEvents = '';
-                                    stopCountdown();
-                                }
-                            }
-                        }, 1000);
                     } else {
-                        // ===== 验证码登录 - 验证 =====
+                        // ===== 注册 / 验证码登录 =====
                         const code = document.getElementById('authCode').value.trim();
                         if (code.length !== 6 || !/^\d{6}$/.test(code)) {
                             throw new Error('请输入6位数字验证码');
                         }
-                        submitBtn.disabled = true;
-                        submitBtn.textContent = '登录中…';
+
                         stopCountdown();
-                        const result = await Auth.verifyCode(email, code);
+                        if (isNewUser) {
+                            // 新用户：验证码 + 密码 → 注册
+                            const pwd = document.getElementById('authPassword').value;
+                            if (!pwd || pwd.length < 6) {
+                                throw new Error('密码长度至少 6 位');
+                            }
+                            submitBtn.disabled = true;
+                            submitBtn.textContent = '注册中…';
+                            await Auth.register(email, code, pwd);
+                        } else {
+                            // 已有账号：验证码 → 登录
+                            submitBtn.disabled = true;
+                            submitBtn.textContent = '登录中…';
+                            await Auth.verifyCode(email, code);
+                        }
+
                         hideModal();
                         updateAuthUI();
                         PlaylistStore.loadFromServer();
-                        // 新用户 / 未设置密码 → 弹出设置密码界面
-                        if (result.is_new_user) {
-                            showSetPasswordModal();
-                        }
                     }
                 } catch (e) {
                     if (errEl) {
@@ -1699,115 +1758,47 @@ const UI = (() => {
                     }
                     if (submitBtn) {
                         submitBtn.disabled = false;
-                        let btnTextFallback;
-                        if (tab === 'password') {
-                            btnTextFallback = '登录';
-                        } else {
-                            btnTextFallback = step === 'email' ? '发送验证码' : '登录 / 注册';
-                        }
-                        submitBtn.textContent = btnTextFallback;
+                        if (state === 'email') submitBtn.textContent = '继续';
+                        else if (state === 'password') submitBtn.textContent = '登录';
+                        else submitBtn.textContent = isNewUser ? '注册' : '登录';
                     }
                 }
             });
 
-            // 返回邮箱步骤 (code tab only)
-            const backLink = document.querySelector('[data-action="auth-back-email"]');
-            if (backLink) {
-                backLink.addEventListener('click', () => {
-                    stopCountdown();
-                    step = 'email';
-                    countdown = 0;
-                    render();
-                });
-            }
-
             // 自动聚焦
             setTimeout(() => {
-                if (tab === 'password') {
+                if (state === 'email') {
                     const el = document.getElementById('authEmail');
                     if (el) el.focus();
+                } else if (state === 'password') {
+                    const el = document.getElementById('authPassword');
+                    if (el) el.focus();
                 } else {
-                    const el = step === 'email'
-                        ? document.getElementById('authEmail')
-                        : document.getElementById('authCode');
+                    const el = document.getElementById('authCode');
                     if (el) el.focus();
                 }
             }, 100);
 
             // Enter 键提交
-            const onKeydown = (e) => {
-                if (e.key === 'Enter' && submitBtn && !submitBtn.disabled) {
-                    e.preventDefault();
-                    submitBtn.click();
-                }
-            };
-            if (tab === 'password') {
-                const pwdEl = document.getElementById('authPassword');
-                if (pwdEl) pwdEl.addEventListener('keydown', onKeydown);
-            }
-            const emailEl = document.getElementById('authEmail');
-            if (emailEl) emailEl.addEventListener('keydown', onKeydown);
-            const codeEl = document.getElementById('authCode');
-            if (codeEl) codeEl.addEventListener('keydown', onKeydown);
-        }
-
-        render();
-    }
-
-    /** 设置密码（首次注册后弹出） */
-    function showSetPasswordModal() {
-        showModal('🔐 设置密码',
-            `<p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">为了安全起见，请设置一个密码，以后可以直接用密码登录。</p>
-             <input class="modal-input" id="newPassword" type="password" placeholder="请输入密码（至少6位）" autocomplete="new-password">
-             <input class="modal-input" id="confirmPassword" type="password" placeholder="请再次输入密码" autocomplete="new-password" style="margin-top:8px">
-             <div class="auth-error" id="setPwdError" style="display:none"></div>`,
-            `<button class="btn btn-secondary" id="btnSkipPwd">暂不设置</button>
-             <button class="btn btn-primary" id="btnSetPwd">设置密码</button>`
-        );
-
-        const errEl = document.getElementById('setPwdError');
-
-        document.getElementById('btnSkipPwd').addEventListener('click', () => {
-            hideModal();
-        });
-
-        document.getElementById('btnSetPwd').addEventListener('click', async () => {
-            const pwd = document.getElementById('newPassword').value;
-            const confirm = document.getElementById('confirmPassword').value;
-
-            if (pwd.length < 6) {
-                if (errEl) { errEl.textContent = '密码长度至少 6 位'; errEl.style.display = ''; }
-                return;
-            }
-            if (pwd !== confirm) {
-                if (errEl) { errEl.textContent = '两次输入的密码不一致'; errEl.style.display = ''; }
-                return;
-            }
-
-            const btn = document.getElementById('btnSetPwd');
-            btn.disabled = true;
-            btn.textContent = '设置中…';
-
-            try {
-                await Auth.setPassword(pwd);
-                hideModal();
-            } catch (e) {
-                if (errEl) { errEl.textContent = e.message; errEl.style.display = ''; }
-                btn.disabled = false;
-                btn.textContent = '设置密码';
-            }
-        });
-
-        // Enter 键提交
-        const confirmEl = document.getElementById('confirmPassword');
-        if (confirmEl) {
-            confirmEl.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    document.getElementById('btnSetPwd').click();
+            const enterEls = [
+                document.getElementById('authEmail'),
+                document.getElementById('authPassword'),
+                document.getElementById('authCode'),
+            ];
+            enterEls.forEach(el => {
+                if (el) {
+                    el.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const btn = document.getElementById('btnAuthSubmit');
+                            if (btn && !btn.disabled) btn.click();
+                        }
+                    });
                 }
             });
         }
+
+        render();
     }
 
     // ========== Add to Playlist Modal ==========
