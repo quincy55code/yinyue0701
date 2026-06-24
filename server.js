@@ -45,26 +45,26 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
 }
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// ========== Nodemailer 邮件服务 ==========
+// ========== 163 邮箱 SMTP（直连 IP 绕过 DNS 劫持） ==========
 const nodemailer = require('nodemailer');
 const mailTransporter = nodemailer.createTransport({
-    host: 'smtp.163.com',
+    host: '117.135.214.13',  // 163 SMTP 真实 IP，绕过 DNS 劫持 (198.18.0.4)
     port: 465,
     secure: true,
+    tls: { servername: 'smtp.163.com' },  // TLS SNI 必须用域名
     auth: {
         user: 'lexiaode@163.com',
         pass: process.env.EMAIL_SMTP_PASS || '',
     },
 });
 
-// 启动时验证邮件配置
 mailTransporter.verify((err) => {
-    if (err) console.error('[mail] SMTP 配置错误:', err.message);
+    if (err) console.error('[mail] SMTP 连接失败:', err.message);
     else console.log('[mail] SMTP 就绪 (lexiaode@163.com)');
 });
 
 const app = express();
-app.use(express.json());   // 解析 POST JSON body
+app.use(express.json({ limit: '5mb' }));   // 解析 POST JSON body（提高限制以支持 base64 头像上传）
 const PORT = 8765;
 
 // CORS — 允许前端跨域访问
@@ -645,13 +645,13 @@ app.post('/api/auth/send-code', async (req, res) => {
         // 生成 6 位验证码
         const code = String(Math.floor(100000 + Math.random() * 900000));
 
-        // 存入数据库（5 分钟有效）
+        // 存入数据库（2 分钟有效）
         const { error: insertErr } = await supabaseAdmin
             .from('verification_codes')
             .insert({
                 email,
                 code,
-                expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+                expires_at: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
             });
 
         if (insertErr) {
@@ -664,12 +664,12 @@ app.post('/api/auth/send-code', async (req, res) => {
             from: '"青春旋律" <lexiaode@163.com>',
             to: email,
             subject: '青春旋律 - 登录验证码',
-            text: `您的验证码是：${code}\n\n有效期 5 分钟，请勿将验证码泄露给他人。\n\n—— 青春旋律音乐播放器`,
+            text: `您的验证码是：${code}\n\n有效期 2 分钟，请勿将验证码泄露给他人。\n\n—— 青春旋律音乐播放器`,
             html: `<div style="max-width:480px;margin:0 auto;padding:24px;font-family:Arial,sans-serif;background:#0B0E0C;color:#EDF0EE;border-radius:12px">
                 <h2 style="color:#4DB88D">🎵 青春旋律</h2>
                 <p style="font-size:16px;margin:20px 0">您的登录验证码是：</p>
                 <div style="background:#1C2320;padding:16px 24px;border-radius:8px;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;color:#4DB88D">${code}</div>
-                <p style="font-size:13px;color:#9BA89F;margin-top:20px">有效期 5 分钟，请勿将验证码泄露给他人。</p>
+                <p style="font-size:13px;color:#9BA89F;margin-top:20px">有效期 2 分钟，请勿将验证码泄露给他人。</p>
                 <hr style="border-color:rgba(255,255,255,0.05);margin:20px 0">
                 <p style="font-size:12px;color:#5D6B62">—— 青春旋律音乐播放器</p>
             </div>`,
@@ -682,29 +682,94 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-/** POST /api/auth/login — 邮箱验证码登录（新用户自动注册） */
+/** POST /api/auth/login — 验证码登录 / 密码登录 */
 app.post('/api/auth/login', async (req, res) => {
-    const { email, code } = req.body;
+    const { email, code, password } = req.body;
 
-    if (!email || !code) {
-        return res.status(400).json({ error: '请输入邮箱和验证码' });
+    if (!email) {
+        return res.status(400).json({ error: '请输入邮箱' });
+    }
+
+    // ===== 密码登录 =====
+    if (password) {
+        if (password.length < 6) {
+            return res.status(400).json({ error: '密码长度至少 6 位' });
+        }
+        try {
+            const { data, error } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            });
+
+            if (error) {
+                if (error.message.includes('Invalid login credentials')) {
+                    return res.status(401).json({ error: '邮箱或密码错误' });
+                }
+                console.error('[login-password]', error.message);
+                return res.status(500).json({ error: '登录失败，请稍后重试' });
+            }
+
+            // 查找用户资料
+            const { data: profile } = await supabaseAdmin
+                .from('users')
+                .select('id, username, avatar_url')
+                .eq('id', data.user.id)
+                .single();
+
+            return res.json({
+                user: {
+                    id: data.user.id,
+                    email,
+                    username: profile ? profile.username : email.split('@')[0],
+                    avatar_url: profile ? profile.avatar_url : null,
+                },
+                session: {
+                    access_token: data.session.access_token,
+                    refresh_token: data.session.refresh_token,
+                    expires_at: data.session.expires_at,
+                },
+                is_new_user: false,
+            });
+        } catch (err) {
+            console.error('[login-password]', err.message);
+            return res.status(500).json({ error: '登录失败' });
+        }
+    }
+
+    // ===== 验证码登录 =====
+    if (!code) {
+        return res.status(400).json({ error: '请输入验证码或密码' });
     }
 
     try {
-        // 1. 查找有效验证码
+        // 1. 查找验证码（不限制过期时间，方便区分错误类型）
         const { data: vcRecord, error: vcError } = await supabaseAdmin
             .from('verification_codes')
             .select('*')
             .eq('email', email)
             .eq('code', code)
-            .eq('used', false)
-            .gt('expires_at', new Date().toISOString())
             .order('created_at', { ascending: false })
             .limit(1)
             .single();
 
         if (vcError || !vcRecord) {
-            return res.status(401).json({ error: '验证码错误或已过期' });
+            return res.status(401).json({ error: '验证码错误' });
+        }
+
+        if (vcRecord.used) {
+            return res.status(401).json({ error: '验证码已使用' });
+        }
+
+        const now = new Date();
+        const expiresAt = new Date(vcRecord.expires_at);
+        if (now > expiresAt) {
+            console.log('[login] code expired:', {
+                email,
+                expires_at: vcRecord.expires_at,
+                now: now.toISOString(),
+                age_seconds: Math.round((now - new Date(vcRecord.created_at)) / 1000),
+            });
+            return res.status(401).json({ error: '验证码已过期，请重新发送' });
         }
 
         // 2. 标记验证码已使用
@@ -713,78 +778,165 @@ app.post('/api/auth/login', async (req, res) => {
             .update({ used: true })
             .eq('id', vcRecord.id);
 
-        // 3. 检查 public.users 是否存在
-        const { data: existingProfile } = await supabaseAdmin
-            .from('users')
-            .select('id, username, avatar_url')
-            .eq('email', email)
-            .single();
+        // 3. 完成登录（查找或创建用户 + 签发 session）
+        await completeLogin(email, res);
+    } catch (err) {
+        console.error('[login]', err.message);
+        res.status(500).json({ error: '登录失败' });
+    }
+});
 
-        const tempPass = 'temp_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-        let userId, username, avatarUrl;
-        let isNewUser = false;
+/** 共享函数：给定 email，查找或创建用户，签出 session 返回给前端 */
+async function completeLogin(email, res) {
+    // 检查 public.users 是否存在
+    const { data: existingProfile } = await supabaseAdmin
+        .from('users')
+        .select('id, username, avatar_url')
+        .eq('email', email)
+        .single();
 
-        if (existingProfile) {
-            // 已有用户：重置密码后登录
-            userId = existingProfile.id;
-            username = existingProfile.username;
-            avatarUrl = existingProfile.avatar_url;
-            await supabaseAdmin.auth.admin.updateUserById(userId, {
-                password: tempPass,
-                email_confirm: true,
-            });
-        } else {
-            // 新用户：在 Supabase Auth 创建 + public.users 插入
-            isNewUser = true;
-            const { data: newAuth, error: createErr } = await supabaseAdmin.auth.admin.createUser({
-                email,
-                password: tempPass,
-                email_confirm: true,
-            });
+    const tempPass = 'temp_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    let userId, username, avatarUrl;
+    let isNewUser = false;
 
-            if (createErr) {
+    if (existingProfile) {
+        // 已有用户：重置密码后登录
+        userId = existingProfile.id;
+        username = existingProfile.username;
+        avatarUrl = existingProfile.avatar_url;
+        const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+            password: tempPass,
+            email_confirm: true,
+        });
+        if (updateErr) {
+            console.error('[login] updateUserById error:', updateErr.message);
+            return res.status(500).json({ error: '登录失败，请重试' });
+        }
+    } else {
+        // 新用户：尝试在 Supabase Auth 创建 + public.users 插入
+        isNewUser = true;
+        const { data: newAuth, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+            email,
+            password: tempPass,
+            email_confirm: true,
+        });
+
+        if (createErr) {
+            // 如果 Auth 中已存在该邮箱（如重复测试），尝试复用已有用户
+            if (createErr.message && createErr.message.includes('already')) {
+                console.log('[login] auth user already exists, looking up...');
+                const { data: existingAuth } = await supabaseAdmin.auth.admin.listUsers();
+                const found = existingAuth?.users?.find(u => u.email === email);
+                if (found) {
+                    userId = found.id;
+                    username = email.split('@')[0];
+                    const { data: existingProfile2 } = await supabaseAdmin
+                        .from('users')
+                        .select('id, username, avatar_url')
+                        .eq('id', userId)
+                        .single();
+                    if (existingProfile2) {
+                        username = existingProfile2.username;
+                        avatarUrl = existingProfile2.avatar_url;
+                        const { error: updateErr2 } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+                            password: tempPass,
+                            email_confirm: true,
+                        });
+                        if (updateErr2) {
+                            console.error('[login] updateUserById error (recovery):', updateErr2.message);
+                            return res.status(500).json({ error: '登录失败，请重试' });
+                        }
+                    } else {
+                        avatarUrl = `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(username)}`;
+                        await supabaseAdmin
+                            .from('users')
+                            .insert({ id: userId, username, email, avatar_url: avatarUrl });
+                    }
+                } else {
+                    console.error('[login] create auth user error:', createErr.message);
+                    return res.status(500).json({ error: '创建用户失败' });
+                }
+            } else {
                 console.error('[login] create auth user error:', createErr.message);
                 return res.status(500).json({ error: '创建用户失败' });
             }
-
+        } else {
             userId = newAuth.user.id;
             username = email.split('@')[0];
-
+            avatarUrl = `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(username)}`;
             const { error: dbErr } = await supabaseAdmin
                 .from('users')
-                .insert({ id: userId, username, email });
+                .insert({ id: userId, username, email, avatar_url: avatarUrl });
 
             if (dbErr) {
-                // 回滚 auth 用户
                 await supabaseAdmin.auth.admin.deleteUser(userId);
                 console.error('[login] create profile error:', dbErr.message);
                 return res.status(500).json({ error: '创建用户资料失败' });
             }
         }
+    }
 
-        // 4. 用临时密码登录获取 session
-        const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+    // 用临时密码登录获取 session（最多重试 3 次，应对 Supabase 密码同步延迟）
+    let signInData, signInErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const result = await supabase.auth.signInWithPassword({
             email,
             password: tempPass,
         });
+        signInData = result.data;
+        signInErr = result.error;
+        if (!signInErr) break;
+        if (attempt < 2) {
+            console.log(`[login] signin retry ${attempt + 1}/3:`, signInErr.message);
+            await new Promise(r => setTimeout(r, 800));
+        }
+    }
 
-        if (signInErr) {
-            console.error('[login] signin error:', signInErr.message);
-            return res.status(500).json({ error: '登录失败，请重试' });
+    if (signInErr) {
+        console.error('[login] signin error:', signInErr.message);
+        return res.status(500).json({ error: '登录失败，请重试' });
+    }
+
+    res.json({
+        user: { id: userId, email, username, avatar_url: avatarUrl || null },
+        session: {
+            access_token: signInData.session.access_token,
+            refresh_token: signInData.session.refresh_token,
+            expires_at: signInData.session.expires_at,
+        },
+        is_new_user: isNewUser,
+    });
+}
+
+/** POST /api/auth/set-password — 设置/修改密码（首次注册或忘记密码后） */
+app.post('/api/auth/set-password', authMiddleware, async (req, res) => {
+    const { password } = req.body;
+
+    if (!password || typeof password !== 'string') {
+        return res.status(400).json({ error: '请输入密码' });
+    }
+    if (password.length < 6) {
+        return res.status(400).json({ error: '密码长度至少 6 位' });
+    }
+    if (password.length > 72) {
+        return res.status(400).json({ error: '密码长度不能超过 72 位' });
+    }
+
+    try {
+        const { error } = await supabaseAdmin.auth.admin.updateUserById(req.user.id, {
+            password,
+            email_confirm: true,
+        });
+
+        if (error) {
+            console.error('[set-password]', error.message);
+            return res.status(500).json({ error: '设置密码失败' });
         }
 
-        res.json({
-            user: { id: userId, email, username, avatar_url: avatarUrl || null },
-            session: {
-                access_token: signInData.session.access_token,
-                refresh_token: signInData.session.refresh_token,
-                expires_at: signInData.session.expires_at,
-            },
-            is_new_user: isNewUser,
-        });
+        res.json({ ok: true });
     } catch (err) {
-        console.error('[login]', err.message);
-        res.status(500).json({ error: '登录失败' });
+        console.error('[set-password]', err.message);
+        res.status(500).json({ error: '设置密码失败' });
     }
 });
 
@@ -1126,6 +1278,62 @@ app.delete('/api/playlists/:id', authMiddleware, async (req, res) => {
     } catch (err) {
         console.error('[playlists delete]', err.message);
         res.status(500).json({ error: '删除歌单失败' });
+    }
+});
+
+/** PATCH /api/playlists/:id — 重命名歌单 */
+app.patch('/api/playlists/:id', authMiddleware, async (req, res) => {
+    const plId = parseInt(req.params.id);
+    const name = (req.body.name || '').trim();
+
+    if (!name || name.length > 100) {
+        return res.status(400).json({ error: '歌单名称无效（1-100个字符）' });
+    }
+
+    try {
+        // 验证歌单属于当前用户
+        const { data: pl } = await supabaseAdmin
+            .from('playlists')
+            .select('id, user_id')
+            .eq('id', plId)
+            .single();
+
+        if (!pl) {
+            return res.status(404).json({ error: '歌单不存在' });
+        }
+        if (pl.user_id !== req.user.id) {
+            return res.status(403).json({ error: '无权操作此歌单' });
+        }
+
+        // 检查同一用户下是否已有同名歌单
+        const { data: dup } = await supabaseAdmin
+            .from('playlists')
+            .select('id')
+            .eq('user_id', req.user.id)
+            .eq('name', name)
+            .neq('id', plId)
+            .limit(1);
+
+        if (dup && dup.length > 0) {
+            return res.status(409).json({ error: '已存在同名歌单' });
+        }
+
+        const { data, error } = await supabaseAdmin
+            .from('playlists')
+            .update({ name, updated_at: new Date().toISOString() })
+            .eq('id', plId)
+            .select('id, name, updated_at')
+            .single();
+
+        if (error) {
+            console.error('[playlists rename]', error.message);
+            return res.status(500).json({ error: '重命名失败' });
+        }
+
+        res.json(data);
+    } catch (err) {
+        console.error('[playlists rename]', err.message);
+        res.status(500).json({ error: '重命名失败' });
     }
 });
 
