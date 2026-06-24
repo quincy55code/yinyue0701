@@ -205,6 +205,45 @@ const PlaylistStore = (() => {
         }
     }
 
+    async function renamePlaylist(plId, newName) {
+        if (!isLoggedIn()) return;
+        const trimmed = newName.trim();
+        if (!trimmed || trimmed.length > 100) return;
+
+        // 乐观更新：立即更新缓存中的名字
+        const old = _playlistsCache.find(p => String(p.id) === String(plId));
+        const oldName = old ? old.name : null;
+        if (old) {
+            old.name = trimmed;
+            old._optimistic = true;
+        }
+        notify();
+
+        try {
+            const resp = await fetch('/api/playlists/' + plId, {
+                method: 'PATCH',
+                headers: authHeaders(),
+                body: JSON.stringify({ name: trimmed }),
+            });
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(err.error || '重命名失败');
+            }
+            const updated = await resp.json();
+            // 用服务器返回值更新缓存
+            const idx = _playlistsCache.findIndex(p => String(p.id) === String(plId));
+            if (idx >= 0) {
+                _playlistsCache[idx] = { ..._playlistsCache[idx], ...updated, _optimistic: false };
+            }
+            notify();
+        } catch (e) {
+            // 回滚
+            if (old) old.name = oldName;
+            notify();
+            throw e;
+        }
+    }
+
     async function addToPlaylist(plId, songId) {
         if (!isLoggedIn()) return;
         // 乐观更新：递增对应歌单的 song_count
@@ -327,6 +366,7 @@ const PlaylistStore = (() => {
         getPlaylistSongs,
         createPlaylist,
         deletePlaylist,
+        renamePlaylist,
         addToPlaylist,
         removeFromPlaylist,
 
