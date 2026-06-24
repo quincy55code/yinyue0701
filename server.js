@@ -78,8 +78,13 @@ app.use((_req, res, next) => {
     next();
 });
 
-// 提供静态文件（index.html, css, js）
-app.use(express.static(__dirname));
+// 提供静态文件（仅限必要的目录和文件）
+app.use('/public', express.static(path.join(__dirname, 'public')));
+app.use('/js', express.static(path.join(__dirname, 'js')));
+app.use('/css', express.static(path.join(__dirname, 'css')));
+app.get('/index.html', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/lyrics.html', (_req, res) => res.sendFile(path.join(__dirname, 'lyrics.html')));
+app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
 // ========== Auth 中间件 ==========
 async function authMiddleware(req, res, next) {
