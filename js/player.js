@@ -18,7 +18,7 @@ const Player = (() => {
     let songs = [];                // 歌曲元数据缓存
     let currentSong = null;       // 当前加载的歌曲对象
     let isPlaying = false;
-    let playMode = 'loop';        // 'loop' | 'single' | 'shuffle'
+    let playMode = 'loop-all';    // 'loop-all' | 'loop-single' | 'shuffle'
     let shuffleQueue = [];        // 随机播放队列（歌曲 ID）
     let shuffleIdx = -1;
     let startTime = 0;            // 片段起始秒数（如离别开出花从 45:48 开始）
@@ -135,6 +135,16 @@ const Player = (() => {
         audio.addEventListener('canplay', () => {
             emit('waiting', false);
         });
+
+        // 监听歌词窗口发来的跳转请求
+        if (lyricsChannel) {
+            lyricsChannel.onmessage = (e) => {
+                const msg = e.data;
+                if (msg && msg.type === 'seek-to' && typeof msg.time === 'number') {
+                    seek(msg.time);
+                }
+            };
+        }
     }
 
     // ========== 歌曲加载 ==========
@@ -144,11 +154,12 @@ const Player = (() => {
         songs = list;
     }
 
-    /** 播放整个歌单：替换歌曲列表并从第一首开始播放 */
-    async function playAll(list) {
+    /** 播放整个歌单：替换歌曲列表并从指定位置开始播放 */
+    async function playAll(list, startIndex) {
         if (!list || list.length === 0) return;
         setSongs(list);
-        await play(list[0].id);
+        const idx = (startIndex !== undefined && startIndex >= 0 && startIndex < list.length) ? startIndex : 0;
+        await play(list[idx].id);
     }
 
     /** 加载歌曲元数据并设置 audio.src */
@@ -269,7 +280,7 @@ const Player = (() => {
         if (songs.length === 0) return;
         const currentId = currentSong ? String(currentSong.id) : null;
 
-        if (playMode === 'single') {
+        if (playMode === 'loop-single') {
             // 单曲循环：从头播放当前歌曲
             if (audio) {
                 audio.currentTime = startTime || 0;
@@ -339,7 +350,7 @@ const Player = (() => {
     // ========== 模式切换 ==========
 
     function setMode(mode) {
-        const modes = ['loop', 'single', 'shuffle'];
+        const modes = ['loop-all', 'loop-single', 'shuffle'];
         if (mode === 'next') {
             const idx = modes.indexOf(playMode);
             playMode = modes[(idx + 1) % modes.length];
@@ -380,6 +391,14 @@ const Player = (() => {
         return isFinite(audio.duration) ? audio.duration : (pageDuration || 0);
     }
 
+    function setVolume(v) {
+        if (audio) audio.volume = Math.max(0, Math.min(1, v));
+    }
+
+    function getVolume() {
+        return audio ? audio.volume : 1;
+    }
+
     return {
         init,
         on,
@@ -393,6 +412,8 @@ const Player = (() => {
         prev,
         setMode,
         getMode,
+        setVolume,
+        getVolume,
         getCurrentSong,
         getIsPlaying,
         getCurrentTime,
