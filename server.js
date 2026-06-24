@@ -45,6 +45,25 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
 }
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+const JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
+if (!JWT_SECRET) {
+    console.error('[init] 缺少 SUPABASE_JWT_SECRET，请检查 .env 文件');
+    process.exit(1);
+}
+
+// ========== 工具函数：签发自定义 JWT（不依赖 jsonwebtoken 包） ==========
+const crypto = require('crypto');
+function signJWT(payload) {
+    const header = { alg: 'HS256', typ: 'JWT' };
+    const enc = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+    const header64 = enc(header);
+    const payload64 = enc(payload);
+    const signature = crypto.createHmac('sha256', JWT_SECRET)
+        .update(`${header64}.${payload64}`)
+        .digest('base64url');
+    return `${header64}.${payload64}.${signature}`;
+}
+
 // ========== 163 邮箱 SMTP（直连 IP 绕过 DNS 劫持） ==========
 const nodemailer = require('nodemailer');
 const mailTransporter = nodemailer.createTransport({
@@ -689,6 +708,28 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
+/** POST /api/auth/check-email — 邮箱优先登录：检查账号是否存在 */
+app.post('/api/auth/check-email', async (req, res) => {
+    const { email } = req.body;
+
+    if (!email || !email.includes('@')) {
+        return res.status(400).json({ error: '请输入有效的邮箱地址' });
+    }
+
+    try {
+        const { data: profile } = await supabaseAdmin
+            .from('users')
+            .select('id')
+            .eq('email', email)
+            .single();
+
+        res.json({ exists: !!profile });
+    } catch (err) {
+        console.error('[check-email]', err.message);
+        res.status(500).json({ error: '查询失败' });
+    }
+});
+
 /** POST /api/auth/login — 验证码登录 / 密码登录 */
 app.post('/api/auth/login', async (req, res) => {
     const { email, code, password } = req.body;
@@ -793,6 +834,30 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+/** 签发 session token（access + refresh） */
+function issueSession(userId, email) {
+    const now = Math.floor(Date.now() / 1000);
+    const access_token = signJWT({
+        sub: userId,
+        email,
+        role: 'authenticated',
+        aud: 'authenticated',
+        iss: 'supabase',
+        iat: now,
+        exp: now + 3600,          // 1 小时
+    });
+    const refresh_token = signJWT({
+        sub: userId,
+        email,
+        role: 'authenticated',
+        aud: 'authenticated',
+        iss: 'supabase',
+        iat: now,
+        exp: now + 86400 * 7,     // 7 天
+    });
+    return { access_token, refresh_token, expires_at: now + 3600 };
+}
+
 /** 共享函数：给定 email，查找或创建用户，签出 session 返回给前端 */
 async function completeLogin(email, res) {
     // 检查 public.users 是否存在
@@ -802,85 +867,71 @@ async function completeLogin(email, res) {
         .eq('email', email)
         .single();
 
+    // ---------- 已有用户：不修改密码，直接签发自定义 JWT ----------
+    if (existingProfile) {
+        const session = issueSession(existingProfile.id, email);
+        return res.json({
+            user: {
+                id: existingProfile.id,
+                email,
+                username: existingProfile.username,
+                avatar_url: existingProfile.avatar_url || null,
+            },
+            session,
+            is_new_user: false,
+        });
+    }
+
+    // ---------- 新用户：创建 Auth 用户 + public.users 资料 ----------
     const tempPass = 'temp_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
     let userId, username, avatarUrl;
-    let isNewUser = false;
 
-    if (existingProfile) {
-        // 已有用户：重置密码后登录
-        userId = existingProfile.id;
-        username = existingProfile.username;
-        avatarUrl = existingProfile.avatar_url;
-        const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
-            password: tempPass,
-            email_confirm: true,
-        });
-        if (updateErr) {
-            console.error('[login] updateUserById error:', updateErr.message);
-            return res.status(500).json({ error: '登录失败，请重试' });
-        }
-    } else {
-        // 新用户：尝试在 Supabase Auth 创建 + public.users 插入
-        isNewUser = true;
-        const { data: newAuth, error: createErr } = await supabaseAdmin.auth.admin.createUser({
-            email,
-            password: tempPass,
-            email_confirm: true,
-        });
+    const { data: newAuth, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+        email,
+        password: tempPass,
+        email_confirm: true,
+    });
 
-        if (createErr) {
-            // 如果 Auth 中已存在该邮箱（如重复测试），尝试复用已有用户
-            if (createErr.message && createErr.message.includes('already')) {
-                console.log('[login] auth user already exists, looking up...');
-                const { data: existingAuth } = await supabaseAdmin.auth.admin.listUsers();
-                const found = existingAuth?.users?.find(u => u.email === email);
-                if (found) {
-                    userId = found.id;
-                    username = email.split('@')[0];
-                    const { data: existingProfile2 } = await supabaseAdmin
-                        .from('users')
-                        .select('id, username, avatar_url')
-                        .eq('id', userId)
-                        .single();
-                    if (existingProfile2) {
-                        username = existingProfile2.username;
-                        avatarUrl = existingProfile2.avatar_url;
-                        const { error: updateErr2 } = await supabaseAdmin.auth.admin.updateUserById(userId, {
-                            password: tempPass,
-                            email_confirm: true,
-                        });
-                        if (updateErr2) {
-                            console.error('[login] updateUserById error (recovery):', updateErr2.message);
-                            return res.status(500).json({ error: '登录失败，请重试' });
-                        }
-                    } else {
-                        avatarUrl = `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(username)}`;
-                        await supabaseAdmin
-                            .from('users')
-                            .insert({ id: userId, username, email, avatar_url: avatarUrl });
-                    }
-                } else {
-                    console.error('[login] create auth user error:', createErr.message);
-                    return res.status(500).json({ error: '创建用户失败' });
-                }
-            } else {
-                console.error('[login] create auth user error:', createErr.message);
-                return res.status(500).json({ error: '创建用户失败' });
+    if (createErr) {
+        // Auth 中已存在但 public.users 中没有（边缘情况）：直接用自定义 JWT
+        if (createErr.message && createErr.message.includes('already')) {
+            console.log('[login] auth user already exists (no profile), looking up...');
+            const { data: existingAuth } = await supabaseAdmin.auth.admin.listUsers();
+            const found = existingAuth?.users?.find(u => u.email === email);
+            if (found) {
+                userId = found.id;
+                username = email.split('@')[0];
+                avatarUrl = `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(username)}`;
+                // 补建 public.users 资料
+                await supabaseAdmin
+                    .from('users')
+                    .insert({ id: userId, username, email, avatar_url: avatarUrl });
+                const session = issueSession(userId, email);
+                return res.json({
+                    user: { id: userId, email, username, avatar_url: avatarUrl || null },
+                    session,
+                    is_new_user: true,
+                });
             }
-        } else {
-            userId = newAuth.user.id;
-            username = email.split('@')[0];
-            avatarUrl = `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(username)}`;
-            const { error: dbErr } = await supabaseAdmin
-                .from('users')
-                .insert({ id: userId, username, email, avatar_url: avatarUrl });
-
-            if (dbErr) {
-                await supabaseAdmin.auth.admin.deleteUser(userId);
-                console.error('[login] create profile error:', dbErr.message);
-                return res.status(500).json({ error: '创建用户资料失败' });
-            }
+            console.error('[login] create auth user error:', createErr.message);
+            return res.status(500).json({ error: '创建用户失败' });
         }
+        console.error('[login] create auth user error:', createErr.message);
+        return res.status(500).json({ error: '创建用户失败' });
+    }
+
+    // 新用户创建成功：插入 public.users 资料 + 用临时密码登录获取 session
+    userId = newAuth.user.id;
+    username = email.split('@')[0];
+    avatarUrl = `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(username)}`;
+    const { error: dbErr } = await supabaseAdmin
+        .from('users')
+        .insert({ id: userId, username, email, avatar_url: avatarUrl });
+
+    if (dbErr) {
+        await supabaseAdmin.auth.admin.deleteUser(userId);
+        console.error('[login] create profile error:', dbErr.message);
+        return res.status(500).json({ error: '创建用户资料失败' });
     }
 
     // 用临时密码登录获取 session（最多重试 3 次，应对 Supabase 密码同步延迟）
@@ -911,7 +962,7 @@ async function completeLogin(email, res) {
             refresh_token: signInData.session.refresh_token,
             expires_at: signInData.session.expires_at,
         },
-        is_new_user: isNewUser,
+        is_new_user: true,
     });
 }
 
