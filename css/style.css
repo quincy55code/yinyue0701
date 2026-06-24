@@ -146,6 +146,7 @@ body {
     flex-direction: column;
     overflow-y: auto;
     z-index: 20;
+    padding-bottom: calc(var(--player-height) + var(--space-md));
 }
 
 .sidebar-brand {
@@ -234,10 +235,17 @@ body {
 }
 
 .sidebar-item-icon {
-    font-size: 16px;
     width: 24px;
-    text-align: center;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
+    color: inherit;
+}
+
+.sidebar-item-icon svg {
+    display: block;
 }
 
 .sidebar-item-label {
@@ -2032,29 +2040,26 @@ body {
     gap: 6px;
 }
 
-/* 反馈按钮 */
-.sidebar-feedback {
-    padding: 0 var(--space-lg) var(--space-sm);
-}
-
-.sidebar-feedback-btn {
+/* 反馈链接 (在用户区底部) */
+.sidebar-feedback-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 100%;
-    padding: 8px 14px;
-    border: 1px solid var(--border-subtle);
+    padding: 6px 0 0;
+    border: none;
     background: transparent;
     color: var(--text-tertiary);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
-    border-radius: var(--radius-full);
     cursor: pointer;
     font-family: var(--font-sans);
-    transition: color var(--duration-micro) var(--ease-out),
-                border-color var(--duration-micro) var(--ease-out);
+    transition: color var(--duration-micro) var(--ease-out);
+    margin-top: 2px;
 }
 
-.sidebar-feedback-btn:hover {
-    color: var(--text-primary);
-    border-color: var(--border-default);
+.sidebar-feedback-link:hover {
+    color: var(--accent);
 }
 
 /* Auth Modal 验证码发送提示 */
@@ -2113,6 +2118,19 @@ body {
     flex: 1;
     font-weight: 500;
     color: var(--text-primary);
+}
+
+.pl-name-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid var(--accent);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 500;
+    padding: 2px 0;
+    outline: none;
+    font-family: inherit;
 }
 
 .playlist-item .pl-count {
