@@ -232,11 +232,6 @@ const UI = (() => {
     }
 
     // ========== 歌曲汇总：分类卡片渲染 ==========
-    const COLLECTION_ICONS = {
-        '热歌榜单': '🔥', 'KTV必点': '🎤', '华语流行': '🎵', '欧美音乐': '🌍',
-        '粤语经典': '🇭🇰', '古风国风': '🏮', '民谣': '🪕', '纯音乐': '🎹',
-        '经典怀旧': '📻', '网络神曲': '🌐', '歌手专区': '🎙️', '主题歌单': '📋',
-    };
 
     function getCollectionBgStyle(name) {
         // 映射 collection 名称 → public/images/tags/ 下的本地图片文件名
@@ -247,6 +242,17 @@ const UI = (() => {
             '网络神曲': '流行', '歌手专区': '一人一首成名曲', '主题歌单': '治愈',
         };
         const slug = slugMap[name] || '热门';
+        return `background-image: url('/public/images/tags/${slug}.jpg')`;
+    }
+
+    // 子分类卡片背景图池 — 按索引轮换，保证每个子项图片都不一样
+    const COLLECTION_ITEM_BG_POOL = [
+        '热门', '流行', '华语', '粤语', '古风', '民谣',
+        '轻音乐', '经典', '一人一首成名曲', '治愈',
+    ];
+
+    function getCollectionItemBgStyle(index) {
+        const slug = COLLECTION_ITEM_BG_POOL[index % COLLECTION_ITEM_BG_POOL.length];
         return `background-image: url('/public/images/tags/${slug}.jpg')`;
     }
 
@@ -275,11 +281,10 @@ const UI = (() => {
         }
         let html = '<div class="tag-grid">';
         collections.forEach((c, i) => {
-            const icon = COLLECTION_ICONS[c.name] || '🎵';
             const bgStyle = getCollectionBgStyle(c.name);
             html += `
             <div class="tag-card tag-card--image" style="--tag-color:${getCoverFallbackColor(i)};--stagger-index:${Math.min(i, 19)};${bgStyle};background-size:cover;background-position:center" data-action="navigate-collection-item" data-collection-id="${c.id}">
-                <div class="tag-card-name">${icon} ${escapeHtml(c.name)}</div>
+                <div class="tag-card-name">${escapeHtml(c.name)}</div>
             </div>`;
         });
         html += '</div>';
@@ -298,7 +303,7 @@ const UI = (() => {
             const action = hasBvid ? 'navigate-collection-songs' : '';
             const bgColor = getCoverFallbackColor(i);
             const bgStyle = hasBvid
-                ? `${getCollectionBgStyle(collectionName)};background-size:cover;background-position:center`
+                ? `${getCollectionItemBgStyle(i)};background-size:cover;background-position:center`
                 : '';
             html += `
             <div class="tag-card tag-card--image ${!hasBvid ? 'tag-card--empty' : ''}" style="--tag-color:${bgColor};--stagger-index:${Math.min(i, 19)};${bgStyle}" data-action="${action}" data-bvid="${escapeHtml(it.bvid || '')}" data-item-title="${escapeHtml(it.title)}">
