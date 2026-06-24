@@ -45,6 +45,24 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
 }
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// ========== Nodemailer 邮件服务 ==========
+const nodemailer = require('nodemailer');
+const mailTransporter = nodemailer.createTransport({
+    host: 'smtp.163.com',
+    port: 465,
+    secure: true,
+    auth: {
+        user: 'lexiaode@163.com',
+        pass: process.env.EMAIL_SMTP_PASS || '',
+    },
+});
+
+// 启动时验证邮件配置
+mailTransporter.verify((err) => {
+    if (err) console.error('[mail] SMTP 配置错误:', err.message);
+    else console.log('[mail] SMTP 就绪 (lexiaode@163.com)');
+});
+
 const app = express();
 app.use(express.json());   // 解析 POST JSON body
 const PORT = 8765;
@@ -161,7 +179,7 @@ app.get('/api/songs', async (req, res) => {
     try {
         const tagName = (req.query.tag || '').trim();
         const bvid = (req.query.bvid || '').trim();
-        const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+        const limit = Math.min(parseInt(req.query.limit) || 300, 300);
 
         let songIds = null;
 
@@ -246,8 +264,16 @@ app.get('/api/search', async (req, res) => {
         const songs = (data || []).map(formatSong).filter(Boolean);
         const songsWithTags = await attachTags(songs);
 
+        // 按歌名去重，同一歌名只保留第一条
+        const seen = new Set();
+        const deduped = songsWithTags.filter(s => {
+            if (seen.has(s.title)) return false;
+            seen.add(s.title);
+            return true;
+        });
+
         res.json({
-            results: songsWithTags,
+            results: deduped,
             query: q,
         });
     } catch (err) {
@@ -589,6 +615,72 @@ app.get('/api/lyrics/:songId', async (req, res) => {
 });
 
 // ========== Auth 端点 ==========
+
+/** POST /api/auth/send-code — 发送邮箱验证码 */
+app.post('/api/auth/send-code', async (req, res) => {
+    const { email } = req.body;
+
+    if (!email || !email.includes('@')) {
+        return res.status(400).json({ error: '请输入有效的邮箱地址' });
+    }
+
+    try {
+        // 60 秒内重复请求限制
+        const { data: recent } = await supabaseAdmin
+            .from('verification_codes')
+            .select('created_at')
+            .eq('email', email)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+
+        if (recent) {
+            const elapsed = Date.now() - new Date(recent.created_at).getTime();
+            if (elapsed < 60000) {
+                const waitSec = Math.ceil((60000 - elapsed) / 1000);
+                return res.status(429).json({ error: `请 ${waitSec} 秒后再试` });
+            }
+        }
+
+        // 生成 6 位验证码
+        const code = String(Math.floor(100000 + Math.random() * 900000));
+
+        // 存入数据库（5 分钟有效）
+        const { error: insertErr } = await supabaseAdmin
+            .from('verification_codes')
+            .insert({
+                email,
+                code,
+                expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+            });
+
+        if (insertErr) {
+            console.error('[send-code] insert error:', insertErr.message);
+            return res.status(500).json({ error: '验证码生成失败' });
+        }
+
+        // 发送邮件
+        await mailTransporter.sendMail({
+            from: '"青春旋律" <lexiaode@163.com>',
+            to: email,
+            subject: '青春旋律 - 登录验证码',
+            text: `您的验证码是：${code}\n\n有效期 5 分钟，请勿将验证码泄露给他人。\n\n—— 青春旋律音乐播放器`,
+            html: `<div style="max-width:480px;margin:0 auto;padding:24px;font-family:Arial,sans-serif;background:#0B0E0C;color:#EDF0EE;border-radius:12px">
+                <h2 style="color:#4DB88D">🎵 青春旋律</h2>
+                <p style="font-size:16px;margin:20px 0">您的登录验证码是：</p>
+                <div style="background:#1C2320;padding:16px 24px;border-radius:8px;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;color:#4DB88D">${code}</div>
+                <p style="font-size:13px;color:#9BA89F;margin-top:20px">有效期 5 分钟，请勿将验证码泄露给他人。</p>
+                <hr style="border-color:rgba(255,255,255,0.05);margin:20px 0">
+                <p style="font-size:12px;color:#5D6B62">—— 青春旋律音乐播放器</p>
+            </div>`,
+        });
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[send-code]', err.message);
+        res.status(500).json({ error: '发送失败，请稍后重试' });
+    }
+});
 
 /** POST /api/auth/signup — 邮箱注册 */
 app.post('/api/auth/signup', async (req, res) => {
