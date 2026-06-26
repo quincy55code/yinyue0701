@@ -19,6 +19,9 @@ const UI = (() => {
     let _embeddedLyricsLines = [];
     let _embeddedLyricsIdx = -1;
 
+    // 连续播放失败计数（防止无限跳曲）
+    let _consecutiveErrors = 0;
+
     // ========== DOM 引用 ==========
     let $ = {};
 
@@ -110,7 +113,7 @@ const UI = (() => {
 
     // ========== 工具函数 ==========
     function formatTime(sec) {
-        if (!sec || !isFinite(sec)) return '0:00';
+        if (sec == null || !isFinite(sec)) return '0:00';
         const m = Math.floor(sec / 60);
         const s = Math.floor(sec % 60);
         return m + ':' + (s < 10 ? '0' : '') + s;
@@ -192,7 +195,8 @@ const UI = (() => {
                 </div>
                 <div class="cover-card-title">${escapeHtml(song.title)}</div>
                 <div class="cover-card-singer">${escapeHtml(song.singer || '')}</div>
-                <button class="cover-card-fav ${(song._fav || song.is_favorite) ? 'favorited' : ''}" data-action="toggle-fav" data-song-id="${song.id}">${(song._fav || song.is_favorite) ? '❤️' : '♡'}</button>
+                <button type="button" class="cover-card-fav ${(song._fav || song.is_favorite) ? 'favorited' : ''}" data-action="toggle-fav" data-song-id="${song.id}">${(song._fav || song.is_favorite) ? '❤️' : '♡'}</button>
+                <button class="cover-card-add-pl" data-action="show-add-to-playlist" data-song-id="${song.id}">+</button>
             </div>`;
         });
         html += '</div>';
@@ -548,8 +552,8 @@ const UI = (() => {
             html += `
             <div class="playlist-item" data-action="open-playlist" data-pl-id="${pl.id}">
                 <span style="font-size:20px">📋</span>
-                <span class="pl-name" data-action="rename-playlist" data-pl-id="${pl.id}" title="点击改名">${escapeHtml(pl.name)}</span>
-                <span class="pl-count">${pl.song_count || 0} 首</span>
+                <span class="pl-name" data-action="rename-playlist" data-pl-id="${pl.id}" title="双击改名">${escapeHtml(pl.name)}</span>
+                <span class="pl-count"><button class="btn-show-all" data-action="open-playlist" data-pl-id="${pl.id}">展示全部</button>${pl.song_count || 0} 首</span>
                 <button class="btn-delete" data-action="delete-playlist" data-pl-id="${pl.id}">🗑</button>
             </div>`;
         });
@@ -754,6 +758,16 @@ const UI = (() => {
         $.modalOverlay.classList.remove('show');
     }
 
+    function showToast(msg) {
+        const existing = document.querySelector('.toast');
+        if (existing) existing.remove();
+        const el = document.createElement('div');
+        el.className = 'toast';
+        el.textContent = msg;
+        document.body.appendChild(el);
+        setTimeout(() => el.remove(), 2000);
+    }
+
     // ========== 搜索 ==========
     function setupSearch() {
         // 输入时仅更新 UI（显示/隐藏清除按钮、搜索历史下拉），不自动搜索
@@ -822,7 +836,7 @@ const UI = (() => {
         $.searchDropdown.innerHTML = `
             <div class="shd-header">
                 <span>最近搜索</span>
-                <button class="shd-clear" data-action="clear-search-history">清除</button>
+                <button type="button" class="shd-clear" data-action="clear-search-history">清除</button>
             </div>
             ${history.slice(0, 8).map(q => `
                 <div class="shd-item" data-action="search-history" data-query="${escapeHtml(q)}">
@@ -1071,7 +1085,7 @@ const UI = (() => {
             <div class="playlist-item" data-action="open-playlist" data-pl-id="${pl.id}">
                 <span style="font-size:20px">📋</span>
                 <span class="pl-name">${escapeHtml(pl.name)}</span>
-                <span class="pl-count">${pl.song_count || 0} 首</span>
+                <span class="pl-count"><button class="btn-show-all" data-action="open-playlist" data-pl-id="${pl.id}">展示全部</button>${pl.song_count || 0} 首</span>
             </div>
         `).join('');
     }
@@ -1252,9 +1266,7 @@ const UI = (() => {
                 return;
             }
             if (action === 'rename-playlist') {
-                e.stopPropagation();  // 防止触发 open-playlist
-                const plId = parseInt(btn.dataset.plId);
-                if (plId) startRename(plId);
+                e.stopPropagation();  // 防止触发 open-playlist（双击时在 dblclick 处理重命名）
                 return;
             }
             if (action === 'open-playlist') {
@@ -1337,8 +1349,11 @@ const UI = (() => {
             if (action === 'do-add-to-pl') {
                 const plId = parseInt(btn.dataset.plId);
                 const sid = parseInt(btn.dataset.songId);
+                btn.classList.add('loading');
+                btn.disabled = true;
                 await PlaylistStore.addToPlaylist(plId, sid);
                 hideModal();
+                showToast('已添加到歌单');
                 return;
             }
             if (action === 'new-playlist-from-add') {
@@ -1346,6 +1361,15 @@ const UI = (() => {
                 showCreatePlaylistModal(sid);
                 return;
             }
+        });
+
+        // 双击歌单名 → 重命名
+        document.body.addEventListener('dblclick', (e) => {
+            const btn = e.target.closest('[data-action="rename-playlist"]');
+            if (!btn) return;
+            e.stopPropagation();
+            const plId = parseInt(btn.dataset.plId);
+            if (plId) startRename(plId);
         });
 
         // 进度条拖拽（支持 click + drag）
@@ -1862,7 +1886,7 @@ const UI = (() => {
         const pls = PlaylistStore.getPlaylists();
         const song = _songCache[songId] || { title: '歌曲 #' + songId };
         const listItems = pls.length
-            ? pls.map(pl => `<div class="playlist-item" style="cursor:pointer" data-action="do-add-to-pl" data-pl-id="${pl.id}" data-song-id="${songId}"><span style="font-size:18px">📋</span><span class="pl-name">${escapeHtml(pl.name)}</span><span class="pl-count">${pl.song_count || 0} 首</span></div>`).join('')
+            ? pls.map(pl => `<div class="playlist-item"><span style="font-size:18px">📋</span><span class="pl-name">${escapeHtml(pl.name)}</span><span class="pl-count">${pl.song_count || 0} 首</span><button class="btn-add-to-pl" data-action="do-add-to-pl" data-pl-id="${pl.id}" data-song-id="${songId}">添加</button></div>`).join('')
             : '<div style="padding:8px;color:var(--text-tertiary)">暂无歌单</div>';
 
         showModal('添加到歌单',
@@ -1884,6 +1908,7 @@ const UI = (() => {
                 hideModal();
                 if (pendingSongId) {
                     await PlaylistStore.addToPlaylist(pl.id, pendingSongId);
+                    showToast('已添加到歌单');
                 }
                 if (_currentView === 'playlists') renderPlaylistsInContent();
             } catch (e) {
@@ -2045,7 +2070,24 @@ const UI = (() => {
             case 'modeChange':
                 updateModeDisplay();
                 break;
+            case 'error':
+                // 歌曲加载失败，自动跳过到下一首
+                _consecutiveErrors++;
+                if (_consecutiveErrors >= 5) {
+                    showToast('连续多首歌曲加载失败，请检查网络后手动播放');
+                    _consecutiveErrors = 0;
+                } else {
+                    showToast('加载失败，正在尝试下一首');
+                    Player.next();
+                }
+                break;
+            case 'ended':
+                // 歌曲播放完毕，自动播放下一首
+                Player.next();
+                break;
             case 'loading':
+                // 歌曲加载成功，重置错误计数
+                _consecutiveErrors = 0;
                 updatePlayBar(data);
                 // 切换歌曲时刷新嵌入式歌词
                 if (_embeddedLyricsOpen && data && data.id) {
@@ -2072,6 +2114,7 @@ const UI = (() => {
             .catch(() => {});
 
         // 初始渲染：推荐歌曲封面网格
+        window._currentSongs = songs;
         $.viewContainer.innerHTML = renderCoverGrid(songs);
         bindCardClicks();
         setActiveSidebarNav('home');

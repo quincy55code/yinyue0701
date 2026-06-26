@@ -168,7 +168,7 @@ const Player = (() => {
         // 优先在 Player 内部列表查找，回退到全局 songCache
         let song = songs.find(s => String(s.id) === String(songId));
         if (!song && window._songCache) {
-            song = window._songCache.find(s => String(s.id) === String(songId));
+            song = window._songCache[songId] || Object.values(window._songCache).find(s => String(s.id) === String(songId));
         }
         if (!song) {
             emit('error', '歌曲不存在');
