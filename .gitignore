@@ -1,3 +1,8 @@
 node_modules/
 .env
 .superpowers/db_pass.txt
+scripts/deploy_to_ecs.py
+scripts/fix_ecs_config.py
+scripts/run_fix_batch.py
+scripts/setup_ecs_ssh.py
+scripts/verify_lyrics_audio.py
