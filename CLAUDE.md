@@ -135,7 +135,7 @@ No build step, no linter, no test suite. Dependencies are already installed (`no
 - `_lyricsCache` in-memory lyrics cache (max 50 entries, both ui.js and lyrics.js)
 - `refreshAll()` rAF-debounced, redundant calls removed
 - `saveLrcOffset()` 500ms debounce
-- `bindCardClicks()` removed — merged into global `setupGlobalDelegation`
+- `bindCardCalls()` removed — merged into global `setupGlobalDelegation`
 - **`authMiddleware` 本地 JWT 验签** — 用 `crypto.createHmac` + `timingSafeEqual` 本地验签，不调 Supabase Auth 远程接口（~0ms vs 200-500ms）。同时保留 `supabase.auth.getUser(token)` fallback 兼容旧版 Supabase 内部密钥签发的 token。[[jwt-local-verify]]
 - **`POST /api/playlists/:id/songs` 并行化** — 验证所有权 + upsert 用 `Promise.all` 并行，去掉 `sort_order` 查询。从 4 次串行网络往返降到 2 次并行。
 - **加入歌单 Hover 弹出菜单** — `showAddToPlaylistPopup()` 代替 `showAddToPlaylistModal()`，点击 "+" 后原地弹出下拉菜单（`position: fixed` 毛玻璃），点击歌单名直接添加，无弹窗动画延迟。鼠标移出 300ms 自动关闭。
@@ -236,9 +236,24 @@ User clicks fav → PlaylistStore.toggleFavorite(sid)
 
 **Global `window._songCache`** — shared between UI and PlaylistStore. **It is an OBJECT `{id: song}`, NOT an array.** UI populates it via `mergeToCache()` (sets `_songCache[s.id] = s`). PlaylistStore's `lookupSong()` reads it via `cache[songId]` with `Object.values(cache).find()` fallback — do NOT call `.find()` directly on it (this crashes with `TypeError: cache.find is not a function`).
 
+### Navigation State Machine
+
+`_currentView` drives which UI is rendered and which action `goBack()` takes:
+
+```
+'home' ──→ 'collection' ──→ 'collection-items' ──→ 'collection-songs'
+                               (goBack → coll)      (goBack → items)
+         ──→ 'favorites'  ──→ goBack → home
+         ──→ 'playlists'  ──→ 'playlist-songs'
+                               (goBack → playlists)
+         ──→ 'search'     ──→ goBack → home
+```
+
+The `[data-action]` event delegation handles all navigation: sidebar items (`nav-home`, `nav-favorites`, `nav-playlists`, `nav-collection`), sidebar tag shortcuts (`nav-collection-hot/classic/yueyu/ktv/minyao` — map to `navigateToCollectionBySlug()`), and collection navigation (`navigate-collection-item`, `navigate-collection-songs`).
+
 ### CSS
 
-- `css/style.css` — Spotify × Apple Music fusion dark theme. **Design tokens** in `:root`: dark green background hierarchy (`--bg-root: #0B0E0C` → `--bg-elevated: #1C2320`), warm green accent (`--accent: #4DB88D`), frosted glass via `backdrop-filter: blur()` on sidebar and player bar. **Layout**: CSS Grid `.app-layout` (sidebar | content-wrapper) + `content-wrapper` flex column (top-bar | content-area). `.content-wrapper` MUST have `overflow: hidden` (not visible). **Components**: `.cover-card` (140px cover image + title/singer + hover play overlay + corner fav button), `.song-list-item` (44px thumbnail row for search), `.tag-card` (emoji icon + name + count), `.sidebar` (240px frosted, 3px green active indicator), `.player-bar` (72px frosted, 48px cover, center controls+progress, right volume popup), `.now-playing-overlay` (full-screen, 280px cover, blurred backdrop), `.lyrics-panel` (`position: fixed; z-index: 25; right: 0; width: 380px` — slide-in via `translateX(105%)` → `translateX(0)` on `.open`). **Responsive breakpoints**: ≥1024px (full sidebar), 768-1023px (hide sidebar, show hamburger + FAB + bottom drawer, lyrics panel full-width), <768px (compact player bar, lyrics panel full-width, progress bar still visible). **Animations**: staggered card entry (`cardEnter` keyframe), skeleton shimmer, `glowPulse` for playing card, `heartPop` for fav toggle, `npoContentIn` for immersive view entrance. `prefers-reduced-motion` respected.
+- `css/style.css` — Spotify × Apple Music fusion dark theme. **Design tokens** in `:root`: dark green background hierarchy (`--bg-root: #0B0E0C` → `--bg-elevated: #1C2320`), warm green accent (`--accent: #4DB88D`), frosted glass via `backdrop-filter: blur()` on sidebar and player bar. **Layout**: CSS Grid `.app-layout` (sidebar | content-wrapper) + `content-wrapper` flex column (top-bar | content-area). `.content-wrapper` MUST have `overflow: hidden` (not visible). **Components**: `.cover-card` (140px cover image + title/singer + hover play overlay + corner fav button), `.song-list-item` (44px thumbnail row for search), `.tag-card` (emoji icon + name + count), `.sidebar` (240px frosted, 3px green active indicator), `.player-bar` (72px frosted, 48px cover, center controls+progress, right volume popup), `.now-playing-overlay` (full-screen, 280px cover, blurred backdrop), `.lyrics-panel` (`position: fixed; z-index: 25; right: 0; width: 380px;` — slide-in via `translateX(105%)` → `translateX(0)` on `.open`). **Responsive breakpoints**: ≥1024px (full sidebar), 768-1023px (hide sidebar, show hamburger + FAB + bottom drawer, lyrics panel full-width), <768px (compact player bar, lyrics panel full-width, progress bar still visible). **Animations**: staggered card entry (`cardEnter` keyframe), skeleton shimmer, `glowPulse` for playing card, `heartPop` for fav toggle, `npoContentIn` for immersive view entrance. `prefers-reduced-motion` respected.
 - `css/lyrics.css` — Lyrics popup window styles. Shares the same CSS variable naming as the main app (dark green theme). Vertical mode: line-by-line scroll with active line in accent color; horizontal mode: two large lines centered side-by-side. Frosted glass container background.
 
 ### Database (`sql/`)
@@ -283,9 +298,9 @@ users ──┬── favorites ──── songs ──── song_tags ──
 - `kugeci_lrc_fetcher.py` — Python scraper for kugeci.com. Searches song → follows result link → extracts LRC from page. Handles GBK encoding, 503 retries, title/singer swap fallback. **Note:** kugeci.com often returns 503 for automated requests.
 - `kugeci_batch_fetch.py` — Improved kugeci scraper. Parses search result `<tr>` table structure with `html.unescape()` to handle `&nbsp;` entities in singer names. Scores candidates by title + singer match, prefers non-cover versions. Used successfully to fetch 34 songs in one batch. 2s rate limit.
 - `whisper_batch.py` — Optimized whisper pipeline: B站 DASH API → download audio only (not video) → faster-whisper → filter noise → upload LRC. Reads `batch_lyrics_failed.json`. Supports `--model` (tiny/base/small/medium), `--limit`, `--start`. **Note:** some BV号s return full compilation audio even with page-specific CID (e.g. BV11LAbz1Eup with all songs as page=1).
--  `calibrate_lyrics.py` — **Whisper 歌词校准（⚠️ 质量不稳定，见下方警告）。** Takes songs that already have LRC, extracts plain lyrics text, downloads B站 DASH audio, runs faster-whisper for accurate timestamps, maps lyrics to whisper segments, generates calibrated LRC. Uploads with `[by:lyrics-calibrator]` marker. Queries songs with `lrc_text=not.is.null`. Supports `--model`, `--limit`, `--offset`. **⚠️ 当 whisper segment 数 ≠ 歌词行数时使用均匀分布而非精确匹配，时间戳仅供参考。大规模使用前必须先 10 首测试！不备份原始 LRC，恢复只能重抓在线源。**
+-  `calibrate_lyrics.py` — **Whisper 歌词校准（⚠️ 质量不稳定）。** Takes songs that already have LRC, extracts plain lyrics text, downloads B站 DASH audio, runs faster-whisper for accurate timestamps, maps lyrics to whisper segments, generates calibrated LRC. Uploads with `[by:lyrics-calibrator]` marker. Queries songs with `lrc_text=not.is.null`. Supports `--model`, `--limit`, `--offset`. **⚠️ 当 whisper segment 数 ≠ 歌词行数时使用均匀分布而非精确匹配，时间戳仅供参考。大规模使用前必须先 10 首测试！不备份原始 LRC，恢复只能重抓在线源。**
 
-**⚠️ 重要:** `fix_swapped_songs.js` **不是一次性脚本** — 它是通用的 title/singer 互换修复工具（v3 智能检测 + 硬编码 200+ 歌手名单）。**每次 `import_songs.js` 导入新 BV 后都应运行 `--verify` 检查。**见 Key Gotchas #35。
+**⚠️ 重要:** `fix_swapped_songs.js` **不是一次性脚本** — 它是通用的 title/singer 互换修复工具（v3 智能检测 + 硬编码 200+ 歌手名单）。**每次 `import_songs.js` 导入新 BV 后都应运行 `--verify` 检查。**见 Key Gotchas 第 4 条。
 
 **Config files:**
 - `scripts/video_list.json` — JSON array of BVID strings used by `import_songs.js`. Edit to add new compilation BV号s before importing.
@@ -296,8 +311,8 @@ users ──┬── favorites ──── songs ──── song_tags ──
 **Preferred: Use `import_songs.js` for batch imports from B站 compilations.**
 1. Add the BV号 to `scripts/video_list.json` (JSON array of strings)
 2. Run `/d/softwa/nodejs/node scripts/import_songs.js` — it parses `NN.歌名 - 歌手` format, deduplicates, and inserts
-3. Run `node scripts/fix_swapped_songs.js --verify` to check for title/singer swap (B站格式不一致)
-4. If swaps detected, run `node scripts/fix_swapped_songs.js` to fix
+3. Run `/d/softwa/nodejs/node scripts/fix_swapped_songs.js --verify` to check for title/singer swap (B站格式不一致)
+4. If swaps detected, run `/d/softwa/nodejs/node scripts/fix_swapped_songs.js` to fix
 5. Then run `map_tags.js` and `fetch_lyrics.js` in sequence
 
 **Manual single-song insert via REST API:**
@@ -354,30 +369,7 @@ python scripts/calibrate_lyrics.py --offset=100 --limit=500
 - 大规模校准（100+首）出问题的概率很高，**不推荐作为常规歌词质量改进手段**。
 
 **校准恢复（Rollback）：**
-如果校准结果不满意（如时间戳偏移、歌词文本错误），可以回滚到在线源原始 LRC：
-
-```bash
-# Step 1: 清除所有校准歌词
-python -c "
-import json, urllib.request
-# (完整脚本见 Key Gotchas #49)
-"
-
-# Step 2: 从 skip_ids.json 中移除已清除的 ID
-python -c "
-import json
-cal_ids = {1,2,3}  # 被清除的 ID 列表
-with open('scripts/skip_ids.json', 'r') as f:
-    skip = json.load(f)
-skip = [s for s in skip if s not in cal_ids]
-with open('scripts/skip_ids.json', 'w') as f:
-    json.dump(skip, f)
-"
-
-# Step 3: 重新抓取原始在线歌词
-/d/softwa/nodejs/node scripts/refetch_lyrics_v2.js
-# 注：refetch_lyrics_v2.js 会自动查询 lrc_text IS NULL 的歌曲
-```
+如果校准结果不满意（如时间戳偏移、歌词文本错误），可以回滚到在线源原始 LRC。见 Key Gotchas 第 49 条（`calibrate_lyrics.py` 不备份原始 LRC）和 47、48 条（`refetch_lyrics_v2.js` 的使用方法）。
 
 **Monitoring:** stdout is buffered on Windows. Check progress by counting output files:
 ```bash
@@ -386,166 +378,122 @@ ls ~/Desktop/单首歌词/calibrate_output/*_calibrated.lrc | wc -l
 
 **Rate:** ~2-5 min/song depending on audio length. Songs with incorrect `page`/`duration_seconds` in DB will download full compilation audio (30+ min) and take 20-30 min each.
 
-## Key Gotchas
+## Key Gotchas (按主题分组)
 
+### 网络 & B站 API
 1. **Seek requires Content-Length.** If the browser doesn't get `Content-Length` in the initial 200 response, it can't derive byte ranges for time positions. Always ensure `server.js` forwards upstream `content-length`. Songs with time segments work around this because the initial `audio.currentTime = startTime` triggers an abort+retry with Range before data streams.
 
 2. **`audio.duration` is Infinity for streamed MP4.** The player uses `duration_seconds` from Supabase as fallback (`pageDuration`). When adding new songs, ensure `duration_seconds` is populated.
 
 3. **B站 DASH audio URLs are temporary.** Never cache them — fetch fresh per request. Use `fnval=16` for DASH format, sort audio streams by bandwidth descending for best quality.
 
-4. **Windows environment.** Node.js is at `/d/softwa/nodejs/node` (not in PATH as `node`). Use `taskkill //F //PID <pid>` to kill processes (not Unix `pkill`). Chinese directory names break `npm init` — write `package.json` manually. Bash is Git Bash (POSIX sh), not cmd.exe — use forward slashes.
+4. **B站合集格式不一致 → title/singer 互换。** `import_songs.js` 的 `parseTitle()` 始终假设 `歌名 - 歌手` 格式（即分隔符左边是歌名、右边是歌手）。但部分 B站合集使用 `歌手 - 歌名` 格式，导入后 `title` 存的是歌手名、`singer` 存的是歌名。**每次 `import_songs.js` 导入后，必须运行 `node scripts/fix_swapped_songs.js --verify` 检查**，如有互换则运行修复。已确认受影响的 BV 合集有 18 个（百首粤语经典、100首经典老歌、00后KTV必点 等），2026-06-26 已修复 1776 首。[[title-singer-swap-fix]]
 
-5. **`express.static(__dirname)` serves the frontend.** The server doubles as a static file server — no separate web server needed.
+5. **163 SMTP uses direct IP to bypass DNS hijacking.** The user's network resolves `smtp.163.com` to a bogus IP (`198.18.0.4`). `server.js` connects to the real IP `117.135.214.13` with `tls: { servername: 'smtp.163.com' }` for TLS SNI. If SMTP fails in the future, the IP may have changed — check with `nslookup smtp.163.com` from a clean network and update the host.
 
-6. **Supabase `.env` is required.** Server exits on startup if any of `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or `EMAIL_SMTP_PASS` are missing. Template at `.env.example`. `SUPABASE_JWT_SECRET` is obtained from Supabase Dashboard → Settings → API → JWT Settings. No DATABASE_URL or postgres password — direct `pg` connections use `db.orphftlwdwuvoscizndx.supabase.co` with password from `.superpowers/db_pass.txt`.
+6. **某些 BV 合集的所有歌曲 page 都是 1。** 如 BV11LAbz1Eup 的所有分P 在 DB 里 `page=1`、`duration_seconds=2117`（整个合集的时长）。B站 DASH API 即使传了 page-specific CID 也返回完整合集的 35 分钟音频。whisper 处理这种歌会非常慢（20-30分钟/首）。需要在 DB 里修正 page 和 duration_seconds。
 
-7. **Supabase Storage `avatars` bucket** — must be created manually in Supabase Dashboard (Storage → New Bucket → `avatars` → Public). Stores user avatar images at path `{userId}/avatar.{ext}`. Upload is done server-side via `supabaseAdmin.storage.from('avatars').upload()` with upsert.
+7. **英文歌曲搜索要用英文名。** lrclib/网易云对中文译名匹配很差。如 "You Are Beautiful - 詹姆斯·布朗特" 搜不到，但 "You Are Beautiful - James Blunt" 能搜到。同样 "Time To Say Goodbye - 莎拉布莱曼" → "Time To Say Goodbye - Sarah Brightman"。
 
-8. **PostgREST DML-only.** `@supabase/supabase-js` uses PostgREST which only supports SELECT/INSERT/UPDATE/DELETE. DDL requires Supabase SQL Editor. The service_role key bypasses RLS but still goes through PostgREST — it cannot execute DDL. For direct DB access use the Supabase REST API with service_role key (see Commands section above).
+8. **歌词搜索来源优先级**：① Lrclib.net（`https://lrclib.net/api/search`，支持同步 LRC），② 网易云音乐 API（`https://music.163.com/api/search/pc`，中文歌最全），③ kugeci.com（`https://www.kugeci.com/`，中文歌词站，项目已有 `scripts/kugeci_lrc_fetcher.py` 爬虫）。英文歌曲搜索必须用英文名（不要用中文译名），如 "You Are Beautiful - James Blunt" 而非 "詹姆斯·布朗特"。
 
-9. **Column name: `bilibili_url` (underscore).** Not `"bilibili url"` with space. Supabase queries must use the underscore form.
+### Windows 环境
+9. **Windows environment.** Node.js is at `/d/softwa/nodejs/node` (not in PATH as `node`). Use `taskkill //F //PID <pid>` to kill processes (not Unix `pkill`). Chinese directory names break `npm init` — write `package.json` manually. Bash is Git Bash (POSIX sh), not cmd.exe — use forward slashes.
 
-10. **Frontend mutation methods fire `notify()` synchronously.** PlaylistStore's optimistic cache update calls `notify()` before the network request completes. Event handlers in ui.js must NOT call `refreshAll()` after mutation methods — the `onChange` → `refreshAll` callback already handles UI refresh. Calling it again causes double-render.
+10. **Python print() 在 Windows GBK 终端下不能用 emoji。** 用英文标记 `[OK]` / `[FAIL]` / `[SKIP]` 代替 ✅/❌/⏭。
 
-11. **`formatSong()` maps DB columns.** `start_seconds` → `start_time`, `end_seconds` → `end_time`, `duration_seconds` → `page_duration`. For segmented songs, `duration` = `end_seconds - start_seconds`. Frontend code uses the camelCase names.
+11. **Windows Python stdout 在后台运行时全缓冲。** 即使 `print()` 也不会实时写入输出文件，导致 `tail -f` 看到空文件。用 `python -u` 或设 `PYTHONUNBUFFERED=1` 解决。但脚本实际在正常执行——通过检查输出目录的文件数来监控进度。
 
-12. **Lyrics channel name is `music_player_lyrics`.** Both `js/player.js` (main window) and `js/lyrics.js` (popup) must use the exact same `BroadcastChannel` name. Message types: `time-update` (main→lyrics, carries `currentTime` in seconds), `song-change` (main→lyrics, carries `id`), `lyrics-open` (main→lyrics). **Messages from popup are objects, not strings**: `{ type: 'lyrics-closed' }` and `{ type: 'mode-change' }`. When checking for closed popup, use `e.data && e.data.type === 'lyrics-closed'`, not `e.data === 'lyrics-closed'`. The embedded lyrics panel in `ui.js` does NOT use BroadcastChannel — it syncs directly via `Player.on()` events.
+### Supabase & 数据库
+12. **Supabase `.env` is required.** Server exits on startup if any of `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or `EMAIL_SMTP_PASS` are missing. Template at `.env.example`. `SUPABASE_JWT_SECRET` is obtained from Supabase Dashboard → Settings → API → JWT Settings. No DATABASE_URL or postgres password — direct `pg` connections use `db.orphftlwdwuvoscizndx.supabase.co` with password from `.superpowers/db_pass.txt`.
 
-13. **`currentTime` in lyrics messages is display time (offset from song start).** For segmented songs, `player.js` subtracts `startTime` before pushing to the lyrics channel. The lyrics parser's `syncTime()` uses this display time directly for line matching.
+13. **Supabase Storage `avatars` bucket** — must be created manually in Supabase Dashboard (Storage → New Bucket → `avatars` → Public). Stores user avatar images at path `{userId}/avatar.{ext}`. Upload is done server-side via `supabaseAdmin.storage.from('avatars').upload()` with upsert.
 
-14. **Lyrics can be viewed two ways: embedded panel OR standalone popup.** Clicking 🎤 toggles the embedded `.lyrics-panel` (a `position: fixed` overlay at the `.app-layout` root level, NOT inside `.content-wrapper`). Clicking ↗ in the panel header pops out the standalone `lyrics.html` window. The embedded panel syncs via `Player.on()` directly — no BroadcastChannel involved. The popup still uses BroadcastChannel for time-update / song-change / lyrics-open messages from the main window, and sends `{ type: 'lyrics-closed' }` / `{ type: 'mode-change' }` back.
+14. **PostgREST DML-only.** `@supabase/supabase-js` uses PostgREST which only supports SELECT/INSERT/UPDATE/DELETE. DDL requires Supabase SQL Editor. The service_role key bypasses RLS but still goes through PostgREST — it cannot execute DDL. For direct DB access use the Supabase REST API with service_role key (see Commands section above).
 
-15. **`Player.on()` `timeupdate` event uses `displayDuration`, not `totalDuration`.** The emitted object is `{ displayCurrent, displayDuration, progress, ... }`. When calling `updateProgress()`, map `data.displayCurrent` → `currentTime` and `data.displayDuration` → `duration`. Using `totalDuration` (which doesn't exist) → `undefined` → progress bar fill never updates.
+15. **Supabase PATCH 成功返回 204 不是 200。** Python `urllib` 检查 `resp.status == 200` 会误判上传失败，必须改为 `resp.status in (200, 201, 204)`。
 
-16. **`.content-wrapper` MUST have `overflow: hidden`.** If set to `visible`, the content area overflows its grid row and covers the `.player-bar` (progress bar, controls become invisible). This was briefly changed to `visible` when the lyrics panel lived inside `.content-wrapper` — but after moving the panel to `position: fixed` at the root, `overflow: hidden` must be restored.
+16. **Column name: `bilibili_url` (underscore).** Not `"bilibili url"` with space. Supabase queries must use the underscore form.
 
-17. **`.lyrics-panel` must stay at `.app-layout` root as `position: fixed`.** If moved inside `.content-wrapper`, it will be covered by the content area's rendered layer and only flash briefly during view transitions. Current CSS: `position: fixed; top: var(--topbar-height); bottom: var(--player-height); right: 0; z-index: 25;`.
+17. **`verification_codes` table stores email verification codes.** Created by `scripts/setup_verification_codes.js` (direct pg connection, reads DB password from `.superpowers/db_pass.txt`). Columns: `id, email, code, expires_at (2min TTL), used, created_at`. Also adds `avatar_url TEXT` column to `public.users`.
 
-18. **`window.open()` for lyrics popout must NOT use `noopener`.** With `noopener`, the browser ignores the window name (`'music_player_lyrics'`) and opens a new window on every click. Without it, the browser reuses the existing window. Same-origin (localhost:8765), so `noopener` is unnecessary.
+18. **`SUPABASE_JWT_SECRET` is mandatory.** The server exits on startup if it's missing. Get it from Supabase Dashboard → Settings → API → JWT Settings. It's used by `signJWT()` to issue custom tokens for verification code login and session management.
 
-19. **BroadcastChannel `lyrics-closed` is an object, not a string.** `lyrics.js` sends `{ type: 'lyrics-closed' }`. `ui.js` checks `e.data && e.data.type === 'lyrics-closed'`. Comparing `e.data === 'lyrics-closed'` (string equality) never matches, so `lyricsWindow` is never nulled — though this doesn't cause multiple popups since the window-name dedup handles that.
+19. **`authMiddleware` 本地 JWT 验签 + Supabase fallback**：优先用 `crypto.createHmac('sha256', JWT_SECRET)` 本地验签。本地失败时降级到 `supabase.auth.getUser(token)` 远程验证，兼容旧版 Supabase 签发的 token。`req.user = { id: payload.sub, email: payload.email }`。
 
-20. **Mobile progress bar is always visible.** The `display: none` on `.player-progress` at ≤767px was removed — the progress bar now stays visible at all screen sizes. Only `.player-right` (volume) remains hidden on mobile and shows on player-bar expand.
+20. **`POST /api/playlists/:id/songs` 并行化**：验证歌单所有权 + upsert 用 `Promise.all` 并行执行，不再有 `sort_order` 查询。从 4 次串行网络往返（authMiddleware 远程验签 + 所有权 + sort_order + upsert）降到 2 次并行。
 
-21. **Home view ≠ Tags view.** `navigateHome()` → `renderCoverGrid(_defaultSongs)` (song covers under "🎵 推荐歌曲" heading). `navigateToTags()` → `renderTagGrid(_tags)` (tag cards under "🎵 音乐分类" heading). They are separate views with separate `_currentView` values (`'home'` vs `'tags'`).
+### 前端渲染 & 事件
+21. **Frontend mutation methods fire `notify()` synchronously.** PlaylistStore's optimistic cache update calls `notify()` before the network request completes. Event handlers in ui.js must NOT call `refreshAll()` after mutation methods — the `onChange` → `refreshAll` callback already handles UI refresh. Calling it again causes double-render.
 
-22. **163 SMTP uses direct IP to bypass DNS hijacking.** The user's network resolves `smtp.163.com` to a bogus IP (`198.18.0.4`). `server.js` connects to the real IP `117.135.214.13` with `tls: { servername: 'smtp.163.com' }` for TLS SNI. If SMTP fails in the future, the IP may have changed — check with `nslookup smtp.163.com` from a clean network and update the host.
+22. **`formatSong()` maps DB columns.** `start_seconds` → `start_time`, `end_seconds` → `end_time`, `duration_seconds` → `page_duration`. For segmented songs, `duration` = `end_seconds - start_seconds`. Frontend code uses the camelCase names.
 
-23. **`verification_codes` table stores email verification codes.** Created by `scripts/setup_verification_codes.js` (direct pg connection, reads DB password from `.superpowers/db_pass.txt`). Columns: `id, email, code, expires_at (2min TTL), used, created_at`. Also adds `avatar_url TEXT` column to `public.users`.
+23. **`formatTime(sec)` must handle `0` as valid.** The check is `sec == null || !isFinite(sec)`, NOT `!sec`. `0` is a valid song duration but `!0` is `true`, which would show "0:00" for songs that legitimately have 0-second duration segments (rare but valid).
 
-24. **Collection item clickability is based on `bvid`, not `song_count`.**
-25. **Verification code login no longer overwrites passwords.** `completeLogin()` uses `issueSession()` (custom JWT) for existing users instead of `updateUserById({ password: tempPass })`. This means a user's password survives verification code logins.
-26. **`SUPABASE_JWT_SECRET` is mandatory.** The server exits on startup if it's missing. Get it from Supabase Dashboard → Settings → API → JWT Settings. It's used by `signJWT()` to issue custom tokens for verification code login and session management.
-27. **Search input uses `type="search"` wrapped in `<form autocomplete="off">` with a hidden email trap input.** Chrome ignores `autocomplete="off"` on individual inputs and autofills saved emails into any text field. Three-layer defense: (1) `<form autocomplete="off">` around the search area, (2) hidden `<input type="email" autocomplete="email">` before the real search input to trap Chrome's autofill, (3) `type="search"` on the real input. All `<button>` elements inside the form MUST have `type="button"` — without it they default to `type="submit"` and cause page reload on click.
-28. **Auth modal uses email-first flow, not tabs.** States: `email` → `password` / `register` / `resetPassword`. No more `showSetPasswordModal`. Password setup happens in the register state. The old tab-based `showAuthModal` was fully replaced. `renderCollectionItemsGrid()` uses `hasBvid = !!it.bvid` to determine whether a sub-tag card is clickable, has a background image, and gets the `tag-card--empty` class. Items with valid `bvid` but `song_count=0` (songs not yet imported) are still clickable. Only `bvid=NULL` items (主题歌单 placeholders) are non-clickable. Do NOT revert this to checking `song_count > 0` — that breaks navigation for any BV whose songs haven't been imported yet.
-29. **`formatTime(sec)` must handle `0` as valid.** The check is `sec == null || !isFinite(sec)`, NOT `!sec`. `0` is a valid song duration but `!0` is `true`, which would show "0:00" for songs that legitimately have 0-second duration segments (rare but valid).
-30. **`window._songCache` is an object `{id: song}`, NOT an array.** `mergeToCache()` populates it as `_songCache[s.id] = s`. Any code that reads it (like `playlist.js:lookupSong()`) must use `cache[id]` or `Object.values(cache).find()`, never `.find()` directly on the cache object — that throws `TypeError: cache.find is not a function` and silently breaks favorite toggling.
-31. **Cover cards have two corner buttons**: `.cover-card-fav` (top-right, ♡/❤️ toggle favorite) and `.cover-card-add-pl` (bottom-right, `+` add to playlist). Both use `z-index: 2` and `position: absolute`. The `+` button matches singer text color (`var(--text-secondary)`) with `font-weight: 300`.
-32. **Toast notification system**: `showToast(msg)` creates a centered toast with `toastBounce` animation, auto-removed via `setTimeout` after 2s. Do NOT use `animationend` event for cleanup — it fires at each animation phase and causes premature removal. Toast has `pointer-events: none; z-index: 200`.
-33. **Playlist rename is double-click (not single-click).** The global `dblclick` event delegation catches `[data-action="rename-playlist"]` and calls `startRename()`. The click handler for the same action only calls `e.stopPropagation()` to prevent triggering `open-playlist` on the parent row. `.pl-name-input` has NO underline (`border: none`).
-34. **Add-to-playlist Hover 弹出菜单**：封面卡片和列表行的 "+" 按钮 Hover/点击弹出 `.add-to-pl-popup`（`position: fixed` 毛玻璃菜单），点击歌单名直接调用 `PlaylistStore.addToPlaylist()`。`_addPopup` 变量跟踪当前弹窗，`_addPopupTimer` 管理 300ms 延迟关闭。全局 `document.body.click` 处理关闭。不再弹出 Modal。
-35. **`authMiddleware` 本地 JWT 验签 + Supabase fallback**：优先用 `crypto.createHmac('sha256', JWT_SECRET)` 本地验签。本地失败时降级到 `supabase.auth.getUser(token)` 远程验证，兼容旧版 Supabase 签发的 token。`req.user = { id: payload.sub, email: payload.email }`。
-36. **B站合集格式不一致 → title/singer 互换。** `import_songs.js` 的 `parseTitle()` 始终假设 `歌名 - 歌手` 格式（即分隔符左边是歌名、右边是歌手）。但部分 B站合集使用 `歌手 - 歌名` 格式，导入后 `title` 存的是歌手名、`singer` 存的是歌名。**每次 `import_songs.js` 导入后，必须运行 `node scripts/fix_swapped_songs.js --verify` 检查**，如有互换则运行修复。已确认受影响的 BV 合集有 18 个（百首粤语经典、100首经典老歌、00后KTV必点 等），2026-06-26 已修复 1776 首。[[title-singer-swap-fix]]
+24. **`window._songCache` is an object `{id: song}`, NOT an array.** `mergeToCache()` populates it as `_songCache[s.id] = s`. Any code that reads it (like `playlist.js:lookupSong()`) must use `cache[id]` or `Object.values(cache).find()`, never `.find()` directly on the cache object — that throws `TypeError: cache.find is not a function` and silently breaks favorite toggling.
 
-37. **`POST /api/playlists/:id/songs` 并行化**：验证歌单所有权 + upsert 用 `Promise.all` 并行执行，不再有 `sort_order` 查询。从 4 次串行网络往返（authMiddleware 远程验签 + 所有权 + sort_order + upsert）降到 2 次并行。
+25. **`_songCache` 合并去重。** 多次 API 调用（songs、search、favorites、playlists）都会 `mergeToCache()`，同一首歌可能从多个来源进入缓存。用 `_songCache[s.id] = s` 确保最新版本覆盖旧版本。
 
-37. **ECS 脚本的 Supabase key**：本地 `verify_lyrics_audio.py` 的 `SUPABASE_SERVICE_KEY` 默认值为空字符串（部署时 JWT 会触发安全分类器拦截 scp）。ECS 上通过 `/root/run_verify.sh` wrapper 从 `/tmp/key_b64.txt`（base64 编码的 key）自动注入环境变量。不要在 SSH 命令中直接传递 JWT token。
+26. **Cover cards have two corner buttons**: `.cover-card-fav` (top-right, ♡/❤️ toggle favorite) and `.cover-card-add-pl` (bottom-right, `+` add to playlist). Both use `z-index: 2` and `position: absolute`. The `+` button matches singer text color (`var(--text-secondary)`) with `font-weight: 300`.
 
-38. **ASR 网关 URL**：阿里云一句话识别 REST API 端点为 `https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/asr`（注意是 `/stream/v1/asr`，不是 `/rest/v1/asr/sentence`，后者返回 404）。Token 从 `nls-meta.cn-shanghai.aliyuncs.com` 获取。
+27. **Toast notification system**: `showToast(msg)` creates a centered toast with `toastBounce` animation, auto-removed via `setTimeout` after 2s. Do NOT use `animationend` event for cleanup — it fires at each animation phase and causes premature removal. Toast has `pointer-events: none; z-index: 200`.
 
-39. **歌词第一句的 LRC 元数据**：很多 LRC 文件在真正的歌词行之前有制作信息（作词/作曲/编曲/配唱制作人/乐队总监/人声编辑/统筹/版权声明等）。`verify_lyrics_audio.py` 的 `META_PATTERNS` 会过滤这些行，并自动回退到下一个候选行（最多 3 次）。添加新的元数据模式时注意不要太激进（如 `歌手-歌名` 匹配会误杀真实歌词）。
+28. **Playlist rename is double-click (not single-click).** The global `dblclick` event delegation catches `[data-action="rename-playlist"]` and calls `startRename()`. The click handler for the same action only calls `e.stopPropagation()` to prevent triggering `open-playlist` on the parent row. `.pl-name-input` has NO underline (`border: none`).
 
-40. **Title/singer 互换检测必须检查两个字段。** 纯音乐检测也要同时检查 title 和 singer 字段——很多合集把艺人名放在 title、曲名放在 singer（如 "赵海洋 - 夜空的寂静"）。`INSTRUMENTAL_ARTISTS` 名单对两个字段都要比对。
+29. **Search input uses `type="search"` wrapped in `<form autocomplete="off">` with a hidden email trap input.** Chrome ignores `autocomplete="off"` on individual inputs and autofills saved emails into any text field. Three-layer defense: (1) `<form autocomplete="off">` around the search area, (2) hidden `<input type="email" autocomplete="email">` before the real search input to trap Chrome's autofill, (3) `type="search"` on the real input. All `<button>` elements inside the form MUST have `type="button"` — without it they default to `type="submit"` and cause page reload on click.
 
-41. **英文歌曲搜索要用英文名。** lrclib/网易云对中文译名匹配很差。如 "You Are Beautiful - 詹姆斯·布朗特" 搜不到，但 "You Are Beautiful - James Blunt" 能搜到。同样 "Time To Say Goodbye - 莎拉布莱曼" → "Time To Say Goodbye - Sarah Brightman"。
+30. **Auth modal uses email-first flow, not tabs.** States: `email` → `password` / `register` / `resetPassword`. No more `showSetPasswordModal`. Password setup happens in the register state.
 
-42. **部分歌曲没有歌词：** 无词歌（如周深《传家》全程吟唱）、纯音乐 OST（如《红色蒲公英》仙剑原声）、轻音乐。这些都是正确的——不应该有 LRC。
+31. **Collection item clickability is based on `bvid`, not `song_count`.** `renderCollectionItemsGrid()` uses `hasBvid = !!it.bvid` to determine whether a sub-tag card is clickable, has a background image, and gets the `tag-card--empty` class. Items with valid `bvid` but `song_count=0` (songs not yet imported) are still clickable. Only `bvid=NULL` items (主题歌单 placeholders) are non-clickable. Do NOT revert this to checking `song_count > 0` — that breaks navigation for any BV whose songs haven't been imported yet.
 
-43. **Supabase PATCH 成功返回 204 不是 200。** Python `urllib` 检查 `resp.status == 200` 会误判上传失败，必须改为 `resp.status in (200, 201, 204)`。
+32. **`window.open()` for lyrics popout must NOT use `noopener`.** With `noopener`, the browser ignores the window name (`'music_player_lyrics'`) and opens a new window on every click. Without it, the browser reuses the existing window. Same-origin (localhost:8765), so `noopener` is unnecessary.
 
-44. **Python print() 在 Windows GBK 终端下不能用 emoji。** 用英文标记 `[OK]` / `[FAIL]` / `[SKIP]` 代替 ✅/❌/⏭。
+33. **Home view ≠ Tags view.** `navigateHome()` → `renderCoverGrid(_defaultSongs)` (song covers under "🎵 推荐歌曲" heading). `navigateToTags()` → `renderTagGrid(_tags)` (tag cards under "🎵 音乐分类" heading). They are separate views with separate `_currentView` values (`'home'` vs `'tags'`).
 
-45. **Windows Python stdout 在后台运行时全缓冲。** 即使 `print()` 也不会实时写入输出文件，导致 `tail -f` 看到空文件。用 `python -u` 或设 `PYTHONUNBUFFERED=1` 解决。但脚本实际在正常执行——通过检查输出目录的文件数来监控进度。
+34. **`.content-wrapper` MUST have `overflow: hidden`.** If set to `visible`, the content area overflows its grid row and covers the `.player-bar` (progress bar, controls become invisible).
 
-46. **某些 BV 合集的所有歌曲 page 都是 1。** 如 BV11LAbz1Eup 的所有分P 在 DB 里 `page=1`、`duration_seconds=2117`（整个合集的时长）。B站 DASH API 即使传了 page-specific CID 也返回完整合集的 35 分钟音频。whisper 处理这种歌会非常慢（20-30分钟/首）。需要在 DB 里修正 page 和 duration_seconds。
+35. **`.lyrics-panel` must stay at `.app-layout` root as `position: fixed`.** If moved inside `.content-wrapper`, it will be covered by the content area's rendered layer and only flash briefly during view transitions. Current CSS: `position: fixed; top: var(--topbar-height); bottom: var(--player-height); right: 0; z-index: 25;`.
 
-47. **Whisper 分段数与歌词行数不等时用均匀分布。** `match_lyrics_to_segments()` 在 segment 数 ≠ 歌词行数时，按时间段均匀插值分配。这样整首歌的起止时间是准的，但单行 sync 是近似值。大部分歌 segment 数和歌词行数差距在 20% 以内。
+36. **Add-to-playlist Hover 弹出菜单**：封面卡片和列表行的 "+" 按钮 Hover/点击弹出 `.add-to-pl-popup`（`position: fixed` 毛玻璃菜单），点击歌单名直接调用 `PlaylistStore.addToPlaylist()`。`_addPopup` 变量跟踪当前弹窗，`_addPopupTimer` 管理 300ms 延迟关闭。全局 `document.body.click` 处理关闭。不再弹出 Modal。
 
-48. **_songCache 合并去重。** 多次 API 调用（songs、search、favorites、playlists）都会 `mergeToCache()`，同一首歌可能从多个来源进入缓存。用 `_songCache[s.id] = s` 确保最新版本覆盖旧版本。
+37. **Mobile progress bar is always visible.** The `display: none` on `.player-progress` at ≤767px was removed — the progress bar now stays visible at all screen sizes. Only `.player-right` (volume) remains hidden on mobile and shows on player-bar expand.
 
-49. **`refetch_lyrics_v2.js` 维护 `scripts/skip_ids.json` 跳过列表。** 脚本在处理每首歌后会将失败/跳过的 ID 追加到 `skip_ids.json`，下次运行自动跳过这些 ID。**如果清除了某首歌的 `lrc_text` 后想重新抓取，必须先从 `skip_ids.json` 中移除该 ID**，否则脚本会跳过它。用 `--ids=1,2,3` 参数可绕过跳过列表限制特定歌曲。
+### 歌词 & BroadcastChannel
+38. **Lyrics channel name is `music_player_lyrics`.** Both `js/player.js` (main window) and `js/lyrics.js` (popup) must use the exact same `BroadcastChannel` name. Message types: `time-update` (main→lyrics, carries `currentTime` in seconds), `song-change` (main→lyrics, carries `id`), `lyrics-open` (main→lyrics). **Messages from popup are objects, not strings**: `{ type: 'lyrics-closed' }` and `{ type: 'mode-change' }`. When checking for closed popup, use `e.data && e.data.type === 'lyrics-closed'`, not `e.data === 'lyrics-closed'`. The embedded lyrics panel in `ui.js` does NOT use BroadcastChannel — it syncs directly via `Player.on()` events.
 
-50. **`calibrate_lyrics.py` 不备份原始 LRC。** 校准直接 PATCH `lrc_text`，原始歌词不会被保留。大规模校准前必须充分测试（10首起步），因为恢复只能通过重新从在线源抓取。**2026-06-28 教训：109 首校准后大部分时间戳不准，用户要求全量恢复，耗时 1h+ 重新抓取。**
+39. **`currentTime` in lyrics messages is display time (offset from song start).** For segmented songs, `player.js` subtracts `startTime` before pushing to the lyrics channel. The lyrics parser's `syncTime()` uses this display time directly for line matching.
 
-51. **`refetch_lyrics_v2.js` 的 `--ids=` 参数**：多 ID 用逗号分隔且不能有空格（如 `--ids=1,2,30,45`）。不带 `--ids=` 时脚本查询所有 `lrc_text IS NULL` 的歌曲（最多 500 首/页）。
+40. **Lyrics can be viewed two ways: embedded panel OR standalone popup.** Clicking 🎤 toggles the embedded `.lyrics-panel` (a `position: fixed` overlay at the `.app-layout` root level, NOT inside `.content-wrapper`). Clicking ↗ in the panel header pops out the standalone `lyrics.html` window. The embedded panel syncs via `Player.on()` directly — no BroadcastChannel involved. The popup still uses BroadcastChannel for time-update / song-change / lyrics-open messages from the main window, and sends `{ type: 'lyrics-closed' }` / `{ type: 'mode-change' }` back.
 
-52. **歌词搜索来源优先级**：① Lrclib.net（`https://lrclib.net/api/search`，支持同步 LRC），② 网易云音乐 API（`https://music.163.com/api/search/pc`，中文歌最全），③ kugeci.com（`https://www.kugeci.com/`，中文歌词站，项目已有 `scripts/kugeci_lrc_fetcher.py` 爬虫）。英文歌曲搜索必须用英文名（不要用中文译名），如 "You Are Beautiful - James Blunt" 而非 "詹姆斯·布朗特"。
+41. **`Player.on()` `timeupdate` event uses `displayDuration`, not `totalDuration`.** The emitted object is `{ displayCurrent, displayDuration, progress, ... }`. When calling `updateProgress()`, map `data.displayCurrent` → `currentTime` and `data.displayDuration` → `duration`. Using `totalDuration` (which doesn't exist) → `undefined` → progress bar fill never updates.
 
-53. **手动纠正歌词流程**：用户发现歌词错误时，提供正确歌词文本 → 直接 PATCH 更新 `lrc_text`。歌手名错误同理，直接 PATCH `singer` 字段。不需要重新运行抓取脚本。
+42. **BroadcastChannel `lyrics-closed` is an object, not a string.** `lyrics.js` sends `{ type: 'lyrics-closed' }`. `ui.js` checks `e.data && e.data.type === 'lyrics-closed'`. Comparing `e.data === 'lyrics-closed'` (string equality) never matches, so `lyricsWindow` is never nulled — though this doesn't cause multiple popups since the window-name dedup handles that.
 
-54. **等不来花开（#5321）** 歌手是 **pro**，正确歌词以 LRC 首行 `[00:02.01]等不来花开 - pro` 为准。
+43. **歌词第一句的 LRC 元数据**：很多 LRC 文件在真正的歌词行之前有制作信息（作词/作曲/编曲/配唱制作人/乐队总监/人声编辑/统筹/版权声明等）。`verify_lyrics_audio.py` 的 `META_PATTERNS` 会过滤这些行，并自动回退到下一个候选行（最多 3 次）。添加新的元数据模式时注意不要太激进（如 `歌手-歌名` 匹配会误杀真实歌词）。
 
-## ECS 歌词验证系统
+44. **部分歌曲没有歌词：** 无词歌（如周深《传家》全程吟唱）、纯音乐 OST（如《红色蒲公英》仙剑原声）、轻音乐。这些都是正确的——不应该有 LRC。
 
-ECS 服务器：阿里云 `121.41.45.199` (实例 `i-bp18v2inztg7q1wuwgp9`, `cn-hangzhou`)，通过 SSH key 免密登录。
+45. **Title/singer 互换检测必须检查两个字段。** 纯音乐检测也要同时检查 title 和 singer 字段——很多合集把艺人名放在 title、曲名放在 singer（如 "赵海洋 - 夜空的寂静"）。`INSTRUMENTAL_ARTISTS` 名单对两个字段都要比对。
 
-**验证流程：**
-```
-ECS: verify_lyrics_audio.py
-  → curl 下载 B站 DASH 音频（带 User-Agent + Referer header）
-  → ffmpeg 从本地文件截取 15 秒 → PCM 16kHz mono
-  → 阿里云一句话识别 ASR（AppKey: n1vY9toGDWrvm5OX）
-  → 中文字符重叠 + pypinyin 拼音对比
-  → 匹配 → PASS / 不匹配 → 清除 lrc_text → 待 refetch
-```
+46. **手动纠正歌词流程**：用户发现歌词错误时，提供正确歌词文本 → 直接 PATCH 更新 `lrc_text`。歌手名错误同理，直接 PATCH `singer` 字段。不需要重新运行抓取脚本。
 
-```bash
-# ---- 歌词验证 (在 ECS 上运行) ----
+### 脚本 & 数据维护
+47. **`refetch_lyrics_v2.js` 维护 `scripts/skip_ids.json` 跳过列表。** 脚本在处理每首歌后会将失败/跳过的 ID 追加到 `skip_ids.json`，下次运行自动跳过这些 ID。**如果清除了某首歌的 `lrc_text` 后想重新抓取，必须先从 `skip_ids.json` 中移除该 ID**，否则脚本会跳过它。用 `--ids=1,2,3` 参数可绕过跳过列表限制特定歌曲。
 
-# SSH 到 ECS
-ssh root@121.41.45.199
+48. **`refetch_lyrics_v2.js` 的 `--ids=` 参数**：多 ID 用逗号分隔且不能有空格（如 `--ids=1,2,30,45`）。不带 `--ids=` 时脚本查询所有 `lrc_text IS NULL` 的歌曲（最多 500 首/页）。
 
-# 测试 20 首（仅报告）
-/root/run_verify.sh --limit=20
+49. **`calibrate_lyrics.py` 不备份原始 LRC。** 校准直接 PATCH `lrc_text`，原始歌词不会被保留。大规模校准前必须充分测试（10首起步），因为恢复只能通过重新从在线源抓取。**2026-06-28 教训：109 首校准后大部分时间戳不准，用户要求全量恢复，耗时 1h+ 重新抓取。**
 
-# 生产运行：500 首一批，自动 --fix 清除错误歌词
-nohup /root/run_verify.sh --limit=500 --offset=0 > /root/verify_out.log 2>&1 &
-tail -f /root/verify_out.log
+50. **Whisper 分段数与歌词行数不等时用均匀分布。** `match_lyrics_to_segments()` 在 segment 数 ≠ 歌词行数时，按时间段均匀插值分配。这样整首歌的起止时间是准的，但单行 sync 是近似值。大部分歌 segment 数和歌词行数差距在 20% 以内。
 
-# 继续下一批
-nohup /root/run_verify.sh --limit=500 --offset=500 >> /root/verify_out.log 2>&1 &
-# offset=1000, 1500, ... 直到覆盖所有歌曲
+51. **Verification code login no longer overwrites passwords.** `completeLogin()` uses `issueSession()` (custom JWT) for existing users instead of `updateUserById({ password: tempPass })`. This means a user's password survives verification code logins.
 
-# 查看汇总
-grep -E '(VERIFICATION|Total|Passed|Failed|Skipped)' /root/verify_out.log
-```
+52. **等不来花开（#5321）** 歌手是 **pro**，正确歌词以 LRC 首行 `[00:02.01]等不来花开 - pro` 为准。
 
-```bash
-# ---- 部署更新到 ECS ----
-# 本地更新脚本后，scp 推送（注意：脚本中的 SUPABASE_SERVICE_KEY 必须用空字符串占位）
-scp scripts/verify_lyrics_audio.py root@121.41.45.199:/root/verify_lyrics_audio.py
-# 然后在 ECS 上确认语法：
-ssh root@121.41.45.199 "python3 -c 'compile(open(\"/root/verify_lyrics_audio.py\").read(), \"x\", \"exec\"); print(\"OK\")'"
-```
+### ECS & 阿里云 ASR
+53. **ECS 脚本的 Supabase key**：本地 `verify_lyrics_audio.py` 的 `SUPABASE_SERVICE_KEY` 默认值为空字符串（部署时 JWT 会触发安全分类器拦截 scp）。ECS 上通过 `/root/run_verify.sh` wrapper 从 `/tmp/key_b64.txt`（base64 编码的 key）自动注入环境变量。不要在 SSH 命令中直接传递 JWT token。
 
-```bash
-# ---- 验证完成后：重新获取被清除的歌词 ----
-# 在本地运行（ECS 上没 Node）：
-/d/softwa/nodejs/node scripts/refetch_lyrics_v2.js
+54. **ASR 网关 URL**：阿里云一句话识别 REST API 端点为 `https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/asr`（注意是 `/stream/v1/asr`，不是 `/rest/v1/asr/sentence`，后者返回 404）。Token 从 `nls-meta.cn-shanghai.aliyuncs.com` 获取。
 
-# refetch_lyrics_v2.js 查询 lrc_text IS NULL 的歌曲，从网易云 + lrclib 重新获取
-# 特性：候选评分、歌手校验、AI歌词检测、写入前验证
-```
-
-**ECS 关键文件：**
-| 文件 | 作用 |
-|------|------|
-| `/root/verify_lyrics_audio.py` | 主验证脚本（Python 3.6 兼容） |
-| `/root/run_verify.sh` | Wrapper：从 base64 解码 key → export → python3 -u |
-| `/tmp/key_b64.txt` | Base64 编码的 Supabase service_role key |
-| `/root/verify_out.log` | 验证日志 |
-| `/root/lyrics_verify_report.json` | 最近一次验证的完整报告 |
-| `/root/lyrics_cleared_ids.json` | 被清除歌词的歌曲 ID 列表 |
-
-**ECS 依赖（已安装）：** ffmpeg, curl, Python 3.6, `requests`, `pypinyin`
+### 通用
+55. **`express.static(__dirname)` serves the frontend.** The server doubles as a static file server — no separate web server needed.

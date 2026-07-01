@@ -366,7 +366,9 @@ const UI = (() => {
                 <div class="song-list-actions">
                     ${isAdminUser() && song.bilibili_url ? `<button class="btn-copy-link" data-action="copy-bilibili-link" data-url="${escapeHtml(getBilibiliUrl(song))}" data-title="${escapeHtml(song.title)}" data-singer="${escapeHtml(song.singer || '')}" data-song-id="${song.id}" title="复制B站链接">🔗</button>` : ''}
                     <button class="btn-fav ${isFav ? 'favorited' : ''}" data-action="toggle-fav" data-song-id="${song.id}">${isFav ? '❤️' : '♡'}</button>
-                    <button class="btn-add" data-action="show-add-to-playlist" data-song-id="${song.id}">+</button>
+                    <button class="btn-add" data-action="show-add-to-playlist" data-song-id="${song.id}">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </button>
                 </div>
             </div>`;
         });
@@ -651,7 +653,7 @@ const UI = (() => {
         // 防止重复打开
         if (document.querySelector('.pl-name-input')) return;
 
-        const nameEl = document.querySelector(`.pl-name[data-pl-id="${plId}"]`);
+        const nameEl = document.querySelector(`.song-list-title[data-pl-id="${plId}"]`);
         if (!nameEl) return;
 
         const oldName = nameEl.textContent;
@@ -660,6 +662,7 @@ const UI = (() => {
         input.className = 'pl-name-input';
         input.value = oldName;
         input.maxLength = 100;
+        input.style.width = '100%';
         nameEl.replaceWith(input);
         input.focus();
         input.select();
@@ -673,9 +676,13 @@ const UI = (() => {
             }
             try {
                 await PlaylistStore.renamePlaylist(plId, newName);
+                // 重命名成功 → 刷新歌单列表 UI（cache 已更新，但 renderPlaylists 重建 DOM）
+                renderPlaylists();
             } catch (e) {
+                // PlaylistStore 已回滚 cache 并 notify()
+                // 重新渲染以恢复旧名字
+                renderPlaylists();
                 alert(e.message);
-                // PlaylistStore.onChange 会触发 refreshAll → renderPlaylistsInContent
             }
         };
 
@@ -697,16 +704,19 @@ const UI = (() => {
         let html = '<button class="btn-new-pl" data-action="new-playlist" style="margin-bottom:12px">+ 新建歌单</button>';
         html += '<div class="song-list">';
         pls.forEach(pl => {
-            const icon = ['📋', '🎵', '🎶', '🎸', '🎧', '🎤', '🎹', '🎻', '🥁'][Math.floor(Math.random() * 9)];
             html += `
             <div class="song-list-item" data-action="open-playlist" data-pl-id="${pl.id}" style="--stagger-index:${Math.min(pls.indexOf(pl), 19)}">
-                <div class="song-list-placeholder" style="background:linear-gradient(135deg,${getCoverFallbackColor(pl.id)},${getCoverFallbackColor(pl.id * 2)});font-size:24px;display:flex">${icon}</div>
+                <div class="song-list-placeholder" style="background:linear-gradient(135deg,${getCoverFallbackColor(pl.id)},${getCoverFallbackColor(pl.id * 2)});font-size:20px;display:flex">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                </div>
                 <div class="song-list-info" style="cursor:pointer" data-action="open-playlist" data-pl-id="${pl.id}">
                     <div class="song-list-title" data-action="rename-playlist-dbl" data-pl-id="${pl.id}" title="双击改名">${escapeHtml(pl.name)}</div>
                     <div class="song-list-meta">${pl.song_count || 0} 首歌曲</div>
                 </div>
                 <div class="song-list-actions">
-                    <button class="btn-fav favorited" data-action="delete-playlist" data-pl-id="${pl.id}" title="删除歌单">🗑️</button>
+                    <button class="btn-fav favorited" data-action="delete-playlist" data-pl-id="${pl.id}" title="删除歌单">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    </button>
                 </div>
             </div>`;
         });
@@ -721,7 +731,7 @@ const UI = (() => {
         const title = pl ? escapeHtml(pl.name) : '歌单';
         updateViewHeader(true, '📋 ' + title);
         setActiveSidebarNav('playlists');
-        $.viewContainer.innerHTML = renderSkeleton(6);
+        $.viewContainer.innerHTML = `<div class="loading-wrap"><div class="loading-ring"></div><span>加载中...</span></div>`;
         bindCardClicks();
 
         PlaylistStore.getPlaylistSongs(plId).then(songs => {
@@ -749,8 +759,12 @@ const UI = (() => {
                     </div>
                     <div class="song-list-actions">
                         <button class="btn-fav ${PlaylistStore.isFavorite(song.id) ? 'favorited' : ''}" data-action="toggle-fav" data-song-id="${song.id}">${PlaylistStore.isFavorite(song.id) ? '❤️' : '♡'}</button>
-                        <button class="btn-add" data-action="show-add-to-playlist" data-song-id="${song.id}">+</button>
-                        <button class="btn-remove-from-pl" data-action="remove-from-pl" data-pl-id="${plId}" data-song-id="${song.id}" title="从歌单移除">✕</button>
+                        <button class="btn-add" data-action="show-add-to-playlist" data-song-id="${song.id}">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        </button>
+                        <button class="btn-remove-from-pl" data-action="remove-from-pl" data-pl-id="${plId}" data-song-id="${song.id}" title="从歌单移除">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
                     </div>
                 </div>`;
             });
@@ -1430,6 +1444,12 @@ const UI = (() => {
                     const idx = parseInt(listItem.dataset.songIndex);
                     if (!isNaN(idx) && window._currentSongs) {
                         Player.playAll(window._currentSongs, idx);
+                        return;
+                    }
+                    // 歌单列表项（没有 songIndex，有 plId）→ 进入歌单
+                    const plId = parseInt(listItem.dataset.plId);
+                    if (!isNaN(plId)) {
+                        navigateToPlaylistSongs(plId);
                     }
                     return;
                 }
@@ -2423,48 +2443,8 @@ const UI = (() => {
     }
 
     function openPlaylistModal(plId) {
-        const pl = PlaylistStore.getPlaylist(plId);
-        if (!pl) return;
-        // 先显示加载中的弹窗
-        showModal(pl.name,
-            `<div class="loading-spinner-wrap"><div class="loading-spinner"></div></div>`,
-            `<button class="btn btn-secondary" data-action="close-modal">关闭</button>`
-        );
-
-        PlaylistStore.getPlaylistSongs(plId).then(songs => {
-            const songList = songs.length
-                ? renderSongList(songs.map((s, i) => ({ ...s, _idx: i })))
-                : '<div class="empty-state" style="padding:20px"><span class="empty-icon">📋</span>歌单是空的</div>';
-
-            showModal(pl.name,
-                `<button class="btn-play-all" style="margin-bottom:12px" data-action="play-pl" data-pl-id="${plId}">▶ 播放全部</button>${songList}`,
-                `<button class="btn btn-secondary" data-action="close-modal">关闭</button>`
-            );
-
-            // 绑定事件——关闭和播放全部也走 data-action 全局委托，只需绑移除歌单和点击播放
-            document.querySelectorAll('[data-action="remove-from-pl"]').forEach(b => {
-                b.addEventListener('click', async () => {
-                    const pid = parseInt(b.dataset.plId);
-                    const sid = parseInt(b.dataset.songId);
-                    await PlaylistStore.removeFromPlaylist(pid, sid);
-                    openPlaylistModal(pid); // 刷新
-                });
-            });
-            // 绑定歌单弹窗内的歌曲点击事件（使用 renderSongList 生成的 .song-list-item）
-            document.querySelectorAll('.modal-overlay.show .song-list-item').forEach((item, i) => {
-                item.addEventListener('click', (e) => {
-                    if (e.target.closest('button')) return;
-                    if (!isNaN(i) && songs.length) {
-                        window._currentSongs = songs;
-                        window._currentPlaylist = plId;
-                        Player.playAll(songs, i);
-                        hideModal();
-                    }
-                });
-            });
-        }).catch(() => {
-            showModal('错误', '<p>加载歌单失败</p>', '<button class="btn btn-secondary" data-action="close-modal">关闭</button>');
-        });
+        // 已改用 navigateToPlaylistSongs 直接在内容区渲染，保留此函数兼容性
+        navigateToPlaylistSongs(plId);
     }
 
     // ========== 播放器事件（Player.on 回调签名: fn(eventName, data)） ==========

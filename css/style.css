@@ -891,6 +891,22 @@ body {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    max-height: calc(100vh - 320px);
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.song-list::-webkit-scrollbar {
+    width: 4px;
+}
+
+.song-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.song-list::-webkit-scrollbar-thumb {
+    background: var(--border-default);
+    border-radius: 2px;
 }
 
 .song-list-item {
@@ -992,6 +1008,7 @@ body {
 /* 列表行操作按钮 — hover 显示 */
 .song-list-actions {
     display: flex;
+    align-items: center;
     gap: 2px;
     flex-shrink: 0;
     opacity: 0;
@@ -1002,7 +1019,7 @@ body {
     opacity: 1;
 }
 
-.btn-fav, .btn-add, .btn-copy-link {
+.btn-fav, .btn-add, .btn-copy-link, .btn-remove-from-pl {
     width: 34px;
     height: 34px;
     border: none;
@@ -1014,16 +1031,19 @@ body {
     align-items: center;
     justify-content: center;
     transition: transform var(--duration-micro) var(--ease-spring),
-                color var(--duration-micro) var(--ease-out);
+                color var(--duration-micro) var(--ease-out),
+                background var(--duration-micro) var(--ease-out);
     color: var(--text-tertiary);
+    flex-shrink: 0;
 }
 
-.btn-fav:hover, .btn-add:hover, .btn-copy-link:hover {
+.btn-fav:hover, .btn-add:hover, .btn-copy-link:hover, .btn-remove-from-pl:hover {
     transform: scale(1.15);
     color: var(--text-primary);
+    background: rgba(255,255,255,0.06);
 }
 
-.btn-fav:active, .btn-add:active, .btn-copy-link:active {
+.btn-fav:active, .btn-add:active, .btn-copy-link:active, .btn-remove-from-pl:active {
     transform: scale(0.88);
 }
 
@@ -2574,8 +2594,7 @@ body {
     align-items: center;
     justify-content: center;
     color: var(--text-tertiary);
-    transition: color var(--duration-micro) var(--ease-out),
-                background var(--duration-micro) var(--ease-out);
+    transition: all var(--duration-micro) var(--ease-out);
 }
 
 .song-list-item:hover .btn-delete-pl {
@@ -2598,6 +2617,26 @@ body {
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
+}
+
+.loading-ring {
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--border-subtle);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+
+.loading-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 0;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 13px;
 }
 
 @keyframes spin {
@@ -2669,29 +2708,7 @@ body {
     color: #F87171;
 }
 
-/* remove-from-pl button in playlist songs page */
-.btn-remove-from-pl {
-    width: 24px;
-    height: 24px;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    font-size: 14px;
-    color: var(--text-tertiary);
-    border-radius: 50%;
-    transition: all var(--duration-micro) var(--ease-out);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-}
-.song-list-item:hover .btn-remove-from-pl {
-    opacity: 1;
-}
-.btn-remove-from-pl:hover {
-    color: #F87171;
-    background: rgba(248,113,113,0.1);
-}
+/* remove-from-pl button in playlist songs page — 已合并到 .btn-fav, .btn-add, .btn-copy-link 统一样式 */
 
 /* Now Playing dot */
 .now-playing-dot {

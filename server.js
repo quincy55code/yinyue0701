@@ -139,8 +139,8 @@ app.use((_req, res, next) => {
 });
 
 // 提供静态文件（仅限必要的目录和文件，添加长期缓存头）
-app.use('/js', express.static(path.join(__dirname, 'js'), { maxAge: '7d', etag: true }));
-app.use('/css', express.static(path.join(__dirname, 'css'), { maxAge: '7d', etag: true }));
+app.use('/js', express.static(path.join(__dirname, 'js'), { maxAge: '1h', etag: true }));
+app.use('/css', express.static(path.join(__dirname, 'css'), { maxAge: '1h', etag: true }));
 app.use('/public', express.static(path.join(__dirname, 'public'), { maxAge: '30d', etag: true }));
 app.get('/index.html', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/lyrics.html', (_req, res) => res.sendFile(path.join(__dirname, 'lyrics.html')));
