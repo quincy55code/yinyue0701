@@ -6,7 +6,8 @@
     <title>🎵 歌词</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
     <link rel="stylesheet" href="css/lyrics.css">
 </head>
 <body>
@@ -16,6 +17,12 @@
             <div class="song-info">
                 <div class="song-title" id="lyricsTitle">未在播放</div>
                 <div class="song-singer" id="lyricsSinger"></div>
+            </div>
+            <div class="lyrics-offset-controls" id="lyricsOffsetControls">
+                <button class="lyrics-offset-btn" id="btnOffsetMinus" title="歌词提前0.5秒">−0.5s</button>
+                <span class="lyrics-offset-val" id="lyricsOffsetVal">±0.0s</span>
+                <button class="lyrics-offset-btn" id="btnOffsetPlus" title="歌词延后0.5秒">+0.5s</button>
+                <button class="lyrics-offset-btn lyrics-offset-reset" id="btnOffsetReset" title="重置偏移" style="visibility:hidden">↺</button>
             </div>
             <button id="btnMode" title="切换模式">≡</button>
             <button id="btnClose" title="关闭">✕</button>

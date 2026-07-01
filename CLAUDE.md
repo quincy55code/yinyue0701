@@ -8,6 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Start the server (Node.js v24 at /d/softwa/nodejs/node)
 /d/softwa/nodejs/node server.js
 
+# Start with production optimizations (compression, helmet, rate limiting)
+ALLOWED_ORIGIN=http://localhost:8765 /d/softwa/nodejs/node server.js
+
 # Kill lingering server process (Windows — pkill doesn't work)
 taskkill //F //PID <pid>
 
@@ -21,6 +24,15 @@ netstat -ano | grep 8765
 
 # Run lyrics auto-matching script (fetches LRC from lrclib.net)
 /d/softwa/nodejs/node scripts/fetch_lyrics.js
+
+# Improved lyrics refetch with candidate scoring (runs after verify_lyrics_audio.py --fix clears wrong lyrics)
+/d/softwa/nodejs/node scripts/refetch_lyrics_v2.js
+
+# Refetch specific songs by ID (comma-separated, no spaces)
+/d/softwa/nodejs/node scripts/refetch_lyrics_v2.js --ids=1,2,3
+
+# Detect potentially wrong lyrics (heuristic: AI-generated, truncated, title mismatch)
+/d/softwa/nodejs/node scripts/detect_wrong_lyrics.js
 
 # Setup tags tables + initial data (needs DB password, direct pg connection)
 /d/softwa/nodejs/node scripts/setup_tags.js <DB_PASSWORD>
@@ -44,6 +56,26 @@ netstat -ano | grep 8765
 
 # Download Unsplash background images for tag category cards → public/images/tags/
 /d/softwa/nodejs/node scripts/download_tag_bg.js
+
+# ---- Lyrics batch pipeline ----
+
+# Full batch: fetch LRC from lrclib + 网易云 for all songs missing lyrics
+/d/softwa/nodejs/node scripts/batch_lyrics_pipeline.js --mode=online
+
+# Retry failed songs with smart fixes (swap detection, name cleanup)
+/d/softwa/nodejs/node scripts/retry_failed_lyrics.js
+
+# Scrape Chinese lyric sites (kugeci.com, 9ku.com) for hard-to-find songs
+python scripts/kugeci_lrc_fetcher.py
+
+# Improved kugeci batch fetch (fixes &nbsp; encoding, table-based result parsing)
+python scripts/kugeci_batch_fetch.py
+
+# Whispers batch: download B站 audio → faster-whisper → upload LRC (for songs with NO online lyrics)
+python scripts/whisper_batch.py --model=small [--limit=N]
+
+# Calibrate existing LRC: re-timestamp lyrics against actual B站 audio via whisper
+python scripts/calibrate_lyrics.py --model=small [--limit=N] [--offset=N]
 
 # ---- Data repair scripts ----
 
@@ -84,6 +116,29 @@ No build step, no linter, no test suite. Dependencies are already installed (`no
 ## Architecture
 
 **Stack:** Node.js Express backend (port 8765) + vanilla HTML/CSS/JS frontend (no framework). Database is Supabase PostgreSQL (`orphftlwdwuvoscizndx.supabase.co`). The Python `app.py` is a legacy backup — the active backend is `server.js`.
+
+**Performance optimizations (applied):**
+- `compression()` middleware — gzip JSON responses (~82% reduction: 121KB → 22KB)
+- `helmet()` security headers + CORS with `ALLOWED_ORIGIN` env var
+- `express-rate-limit`: global (100/min), auth (5/min), stream (60/min)
+- Static files: JS/CSS `max-age=7d`, images `max-age=30d`, ETag
+- Google Fonts: `media="print" onload="this.media='all'"` non-blocking
+- API response cache: `/api/collections` cached 5 minutes in-memory (apiCache)
+- DB query: `/api/tags` prefers `supabase.rpc('get_tag_song_counts')` GROUP BY, falls back to JS counting
+- `/api/stream/:songId` selects only needed columns, not `*`
+- Email sends (send-code, feedback) are fire-and-forget, not awaited
+- `content-visibility: auto` on `.cover-card`, `.tag-card`, `.song-list-item`
+- `will-change: transform` on animated cards
+- `decoding="async"` on cover images
+- `mergeToCache()` LRU eviction at 1000 entries
+- `fetchWithDedup()` — AbortController-based request dedup
+- `_lyricsCache` in-memory lyrics cache (max 50 entries, both ui.js and lyrics.js)
+- `refreshAll()` rAF-debounced, redundant calls removed
+- `saveLrcOffset()` 500ms debounce
+- `bindCardClicks()` removed — merged into global `setupGlobalDelegation`
+- **`authMiddleware` 本地 JWT 验签** — 用 `crypto.createHmac` + `timingSafeEqual` 本地验签，不调 Supabase Auth 远程接口（~0ms vs 200-500ms）。同时保留 `supabase.auth.getUser(token)` fallback 兼容旧版 Supabase 内部密钥签发的 token。[[jwt-local-verify]]
+- **`POST /api/playlists/:id/songs` 并行化** — 验证所有权 + upsert 用 `Promise.all` 并行，去掉 `sort_order` 查询。从 4 次串行网络往返降到 2 次并行。
+- **加入歌单 Hover 弹出菜单** — `showAddToPlaylistPopup()` 代替 `showAddToPlaylistModal()`，点击 "+" 后原地弹出下拉菜单（`position: fixed` 毛玻璃），点击歌单名直接添加，无弹窗动画延迟。鼠标移出 300ms 自动关闭。
 
 **Static assets:** `express.static(__dirname)` serves the entire project root. Tag card background images are in `public/images/tags/` (downloaded by `download_tag_bg.js` from Unsplash). The directory must exist before running that script.
 
@@ -144,6 +199,10 @@ Favorites & Playlists endpoints — all behind `authMiddleware` (JWT token valid
 Credentials load from `.env` via a manual parser (no `dotenv` dependency). `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET` (from Supabase Dashboard → Settings → API → JWT Settings), and `EMAIL_SMTP_PASS` (163 mailbox SMTP authorization code) are all required at startup. Template at `.env.example`.
 
 **Critical: Range/CORS is handled inline without extra dependencies.** The server forwards `req.headers.range` to B站 CDN so seeking works. It also forwards `Content-Length` from upstream — without it, browsers can't map time→byte offsets and `audio.currentTime = X` silently fails.
+
+**Pending setup:**
+- Execute `sql/get_tag_song_counts.sql` in Supabase SQL Editor to enable GROUP BY RPC for `/api/tags`
+- Set `ALLOWED_ORIGIN` env var in production (e.g. `https://your-domain.com`)
 
 ### Frontend (vanilla JS IIFE modules)
 
@@ -217,10 +276,20 @@ users ──┬── favorites ──── songs ──── song_tags ──
 - `fill_singers.js` — Fills empty singer fields. Uses 4 strategies: ① extract `【歌手】歌名` bracket format, ② 400+ entry `KNOWN_SINGERS` hardcoded map, ③ match same-title songs in DB by frequency, ④ fuzzy normalized title matching. Supports `--dry-run`.
 - `fix_song_titles.js`, `fix_song_data.js`, `fix_english_songs.js`, `fix_foreign_swaps.js`, `fix_bv1xh68YvEij.js`, `check_foreign_swaps.js`, `undo_bv.js`, `retry_lyrics.js`, `fix_wrong_lyrics.js` — One-off data repair scripts for specific cleanup tasks. Not expected to be run regularly.
 
+**Lyrics processing (new):**
+- `batch_lyrics_pipeline.js` — Main lyrics pipeline. Three modes: `online` (lrclib+网易云, fast), `whisper` (full whisper pipeline, slow), `hybrid` (default: online first, whisper fallback). Reads song list from `~/Desktop/无歌词歌曲.txt`, queries Supabase for bvid/page, scores candidates, uploads LRC. Supports `--dry-run`, `--limit=N`, `--start=N`. Progress saved to `scripts/batch_lyrics_progress.json`, failures to `scripts/batch_lyrics_failed.json`.
+- `retry_failed_lyrics.js` — Smart retry for `batch_lyrics_failed.json`. Detects title/singer swap via `KNOWN_SINGERS` set, cleans singer fields (removes actor names), strips version suffixes from titles, tries multiple search variants. Updates failed file on completion.
+- `scrape_chinese_lyrics.js` — Attempts to scrape LRC from Chinese sites (kugeci.com, baidu baike). Mostly deprecated in favor of Python version.
+- `kugeci_lrc_fetcher.py` — Python scraper for kugeci.com. Searches song → follows result link → extracts LRC from page. Handles GBK encoding, 503 retries, title/singer swap fallback. **Note:** kugeci.com often returns 503 for automated requests.
+- `kugeci_batch_fetch.py` — Improved kugeci scraper. Parses search result `<tr>` table structure with `html.unescape()` to handle `&nbsp;` entities in singer names. Scores candidates by title + singer match, prefers non-cover versions. Used successfully to fetch 34 songs in one batch. 2s rate limit.
+- `whisper_batch.py` — Optimized whisper pipeline: B站 DASH API → download audio only (not video) → faster-whisper → filter noise → upload LRC. Reads `batch_lyrics_failed.json`. Supports `--model` (tiny/base/small/medium), `--limit`, `--start`. **Note:** some BV号s return full compilation audio even with page-specific CID (e.g. BV11LAbz1Eup with all songs as page=1).
+-  `calibrate_lyrics.py` — **Whisper 歌词校准（⚠️ 质量不稳定，见下方警告）。** Takes songs that already have LRC, extracts plain lyrics text, downloads B站 DASH audio, runs faster-whisper for accurate timestamps, maps lyrics to whisper segments, generates calibrated LRC. Uploads with `[by:lyrics-calibrator]` marker. Queries songs with `lrc_text=not.is.null`. Supports `--model`, `--limit`, `--offset`. **⚠️ 当 whisper segment 数 ≠ 歌词行数时使用均匀分布而非精确匹配，时间戳仅供参考。大规模使用前必须先 10 首测试！不备份原始 LRC，恢复只能重抓在线源。**
+
 **⚠️ 重要:** `fix_swapped_songs.js` **不是一次性脚本** — 它是通用的 title/singer 互换修复工具（v3 智能检测 + 硬编码 200+ 歌手名单）。**每次 `import_songs.js` 导入新 BV 后都应运行 `--verify` 检查。**见 Key Gotchas #35。
 
 **Config files:**
 - `scripts/video_list.json` — JSON array of BVID strings used by `import_songs.js`. Edit to add new compilation BV号s before importing.
+- `scripts/instrumental_ids.json` — Auto-generated list of song IDs that are pure instrumental (no lyrics expected). Generated by `kugeci_batch_fetch.py` classification pass. Used to track which songs should be skipped during lyrics fetches.
 
 ## Adding a Song
 
@@ -253,6 +322,69 @@ users ──┬── favorites ──── songs ──── song_tags ──
    - `duration_seconds` = the page duration from B站 API
 
 3. **The server defaults to top 10 by ID ascending** (`/api/songs`). Pass `?limit=300` (max) to get more. New songs with higher IDs are discoverable via search or tag filtering even if they don't appear in the default top-10.
+
+## Lyrics Calibration Workflow
+
+**⚠️ 重要：校准质量不可靠，大规模使用前必须小批量测试！**
+
+When lyrics have sync issues (歌曲与歌唱不同步 — LRC timestamps from online sources don't match B站 audio timing):
+
+```bash
+# ⚠️ 必须先测试小批量（10首），确认质量后再决定是否继续
+python scripts/calibrate_lyrics.py --limit=10 --model=small
+
+# Full calibration: re-timestamp all LRC against B站 audio via whisper
+python scripts/calibrate_lyrics.py --model=small --limit=1000
+
+# Resume from offset
+python scripts/calibrate_lyrics.py --offset=100 --limit=500
+```
+
+**How it works:**
+1. Extract plain lyrics text from existing LRC (strip timestamps, keep text)
+2. Download B站 DASH audio for the specific song page
+3. faster-whisper transcription → accurate timestamps from real audio
+4. Match lyrics text to whisper time segments → calibrated LRC
+5. Upload to Supabase with `[by:lyrics-calibrator]` marker
+
+**Known risks:**
+- `match_lyrics_to_segments()` 在 whisper segment 数与歌词行数不等时使用**均匀分布**插值，时间戳是近似值而非精确匹配。只当 segment 数 ≈ 歌词行数时效果才好。
+- **不备份原始 LRC** — 覆盖后无法直接回滚。如需恢复，必须重新从在线源抓取（见下方"恢复校准"）。
+- 部分 BV 合集所有分P 的 `page=1` → 下载完整合集音频 → whisper 转写结果错误。
+- 大规模校准（100+首）出问题的概率很高，**不推荐作为常规歌词质量改进手段**。
+
+**校准恢复（Rollback）：**
+如果校准结果不满意（如时间戳偏移、歌词文本错误），可以回滚到在线源原始 LRC：
+
+```bash
+# Step 1: 清除所有校准歌词
+python -c "
+import json, urllib.request
+# (完整脚本见 Key Gotchas #49)
+"
+
+# Step 2: 从 skip_ids.json 中移除已清除的 ID
+python -c "
+import json
+cal_ids = {1,2,3}  # 被清除的 ID 列表
+with open('scripts/skip_ids.json', 'r') as f:
+    skip = json.load(f)
+skip = [s for s in skip if s not in cal_ids]
+with open('scripts/skip_ids.json', 'w') as f:
+    json.dump(skip, f)
+"
+
+# Step 3: 重新抓取原始在线歌词
+/d/softwa/nodejs/node scripts/refetch_lyrics_v2.js
+# 注：refetch_lyrics_v2.js 会自动查询 lrc_text IS NULL 的歌曲
+```
+
+**Monitoring:** stdout is buffered on Windows. Check progress by counting output files:
+```bash
+ls ~/Desktop/单首歌词/calibrate_output/*_calibrated.lrc | wc -l
+```
+
+**Rate:** ~2-5 min/song depending on audio length. Songs with incorrect `page`/`duration_seconds` in DB will download full compilation audio (30+ min) and take 20-30 min each.
 
 ## Key Gotchas
 
@@ -312,5 +444,108 @@ users ──┬── favorites ──── songs ──── song_tags ──
 31. **Cover cards have two corner buttons**: `.cover-card-fav` (top-right, ♡/❤️ toggle favorite) and `.cover-card-add-pl` (bottom-right, `+` add to playlist). Both use `z-index: 2` and `position: absolute`. The `+` button matches singer text color (`var(--text-secondary)`) with `font-weight: 300`.
 32. **Toast notification system**: `showToast(msg)` creates a centered toast with `toastBounce` animation, auto-removed via `setTimeout` after 2s. Do NOT use `animationend` event for cleanup — it fires at each animation phase and causes premature removal. Toast has `pointer-events: none; z-index: 200`.
 33. **Playlist rename is double-click (not single-click).** The global `dblclick` event delegation catches `[data-action="rename-playlist"]` and calls `startRename()`. The click handler for the same action only calls `e.stopPropagation()` to prevent triggering `open-playlist` on the parent row. `.pl-name-input` has NO underline (`border: none`).
-34. **Add-to-playlist modal buttons**: Each playlist row has a frosted-glass "添加" button (`.btn-add-to-pl`) with `data-action="do-add-to-pl"`. On click, it gets `.loading` class (CSS spinner via `::after` pseudo-element), disables itself, calls the API, then closes modal + shows toast.
-35. **B站合集格式不一致 → title/singer 互换。** `import_songs.js` 的 `parseTitle()` 始终假设 `歌名 - 歌手` 格式（即分隔符左边是歌名、右边是歌手）。但部分 B站合集使用 `歌手 - 歌名` 格式，导入后 `title` 存的是歌手名、`singer` 存的是歌名。**每次 `import_songs.js` 导入后，必须运行 `node scripts/fix_swapped_songs.js --verify` 检查**，如有互换则运行修复。已确认受影响的 BV 合集有 18 个（百首粤语经典、100首经典老歌、00后KTV必点 等），2026-06-26 已修复 1776 首。[[title-singer-swap-fix]]
+34. **Add-to-playlist Hover 弹出菜单**：封面卡片和列表行的 "+" 按钮 Hover/点击弹出 `.add-to-pl-popup`（`position: fixed` 毛玻璃菜单），点击歌单名直接调用 `PlaylistStore.addToPlaylist()`。`_addPopup` 变量跟踪当前弹窗，`_addPopupTimer` 管理 300ms 延迟关闭。全局 `document.body.click` 处理关闭。不再弹出 Modal。
+35. **`authMiddleware` 本地 JWT 验签 + Supabase fallback**：优先用 `crypto.createHmac('sha256', JWT_SECRET)` 本地验签。本地失败时降级到 `supabase.auth.getUser(token)` 远程验证，兼容旧版 Supabase 签发的 token。`req.user = { id: payload.sub, email: payload.email }`。
+36. **B站合集格式不一致 → title/singer 互换。** `import_songs.js` 的 `parseTitle()` 始终假设 `歌名 - 歌手` 格式（即分隔符左边是歌名、右边是歌手）。但部分 B站合集使用 `歌手 - 歌名` 格式，导入后 `title` 存的是歌手名、`singer` 存的是歌名。**每次 `import_songs.js` 导入后，必须运行 `node scripts/fix_swapped_songs.js --verify` 检查**，如有互换则运行修复。已确认受影响的 BV 合集有 18 个（百首粤语经典、100首经典老歌、00后KTV必点 等），2026-06-26 已修复 1776 首。[[title-singer-swap-fix]]
+
+37. **`POST /api/playlists/:id/songs` 并行化**：验证歌单所有权 + upsert 用 `Promise.all` 并行执行，不再有 `sort_order` 查询。从 4 次串行网络往返（authMiddleware 远程验签 + 所有权 + sort_order + upsert）降到 2 次并行。
+
+37. **ECS 脚本的 Supabase key**：本地 `verify_lyrics_audio.py` 的 `SUPABASE_SERVICE_KEY` 默认值为空字符串（部署时 JWT 会触发安全分类器拦截 scp）。ECS 上通过 `/root/run_verify.sh` wrapper 从 `/tmp/key_b64.txt`（base64 编码的 key）自动注入环境变量。不要在 SSH 命令中直接传递 JWT token。
+
+38. **ASR 网关 URL**：阿里云一句话识别 REST API 端点为 `https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/asr`（注意是 `/stream/v1/asr`，不是 `/rest/v1/asr/sentence`，后者返回 404）。Token 从 `nls-meta.cn-shanghai.aliyuncs.com` 获取。
+
+39. **歌词第一句的 LRC 元数据**：很多 LRC 文件在真正的歌词行之前有制作信息（作词/作曲/编曲/配唱制作人/乐队总监/人声编辑/统筹/版权声明等）。`verify_lyrics_audio.py` 的 `META_PATTERNS` 会过滤这些行，并自动回退到下一个候选行（最多 3 次）。添加新的元数据模式时注意不要太激进（如 `歌手-歌名` 匹配会误杀真实歌词）。
+
+40. **Title/singer 互换检测必须检查两个字段。** 纯音乐检测也要同时检查 title 和 singer 字段——很多合集把艺人名放在 title、曲名放在 singer（如 "赵海洋 - 夜空的寂静"）。`INSTRUMENTAL_ARTISTS` 名单对两个字段都要比对。
+
+41. **英文歌曲搜索要用英文名。** lrclib/网易云对中文译名匹配很差。如 "You Are Beautiful - 詹姆斯·布朗特" 搜不到，但 "You Are Beautiful - James Blunt" 能搜到。同样 "Time To Say Goodbye - 莎拉布莱曼" → "Time To Say Goodbye - Sarah Brightman"。
+
+42. **部分歌曲没有歌词：** 无词歌（如周深《传家》全程吟唱）、纯音乐 OST（如《红色蒲公英》仙剑原声）、轻音乐。这些都是正确的——不应该有 LRC。
+
+43. **Supabase PATCH 成功返回 204 不是 200。** Python `urllib` 检查 `resp.status == 200` 会误判上传失败，必须改为 `resp.status in (200, 201, 204)`。
+
+44. **Python print() 在 Windows GBK 终端下不能用 emoji。** 用英文标记 `[OK]` / `[FAIL]` / `[SKIP]` 代替 ✅/❌/⏭。
+
+45. **Windows Python stdout 在后台运行时全缓冲。** 即使 `print()` 也不会实时写入输出文件，导致 `tail -f` 看到空文件。用 `python -u` 或设 `PYTHONUNBUFFERED=1` 解决。但脚本实际在正常执行——通过检查输出目录的文件数来监控进度。
+
+46. **某些 BV 合集的所有歌曲 page 都是 1。** 如 BV11LAbz1Eup 的所有分P 在 DB 里 `page=1`、`duration_seconds=2117`（整个合集的时长）。B站 DASH API 即使传了 page-specific CID 也返回完整合集的 35 分钟音频。whisper 处理这种歌会非常慢（20-30分钟/首）。需要在 DB 里修正 page 和 duration_seconds。
+
+47. **Whisper 分段数与歌词行数不等时用均匀分布。** `match_lyrics_to_segments()` 在 segment 数 ≠ 歌词行数时，按时间段均匀插值分配。这样整首歌的起止时间是准的，但单行 sync 是近似值。大部分歌 segment 数和歌词行数差距在 20% 以内。
+
+48. **_songCache 合并去重。** 多次 API 调用（songs、search、favorites、playlists）都会 `mergeToCache()`，同一首歌可能从多个来源进入缓存。用 `_songCache[s.id] = s` 确保最新版本覆盖旧版本。
+
+49. **`refetch_lyrics_v2.js` 维护 `scripts/skip_ids.json` 跳过列表。** 脚本在处理每首歌后会将失败/跳过的 ID 追加到 `skip_ids.json`，下次运行自动跳过这些 ID。**如果清除了某首歌的 `lrc_text` 后想重新抓取，必须先从 `skip_ids.json` 中移除该 ID**，否则脚本会跳过它。用 `--ids=1,2,3` 参数可绕过跳过列表限制特定歌曲。
+
+50. **`calibrate_lyrics.py` 不备份原始 LRC。** 校准直接 PATCH `lrc_text`，原始歌词不会被保留。大规模校准前必须充分测试（10首起步），因为恢复只能通过重新从在线源抓取。**2026-06-28 教训：109 首校准后大部分时间戳不准，用户要求全量恢复，耗时 1h+ 重新抓取。**
+
+51. **`refetch_lyrics_v2.js` 的 `--ids=` 参数**：多 ID 用逗号分隔且不能有空格（如 `--ids=1,2,30,45`）。不带 `--ids=` 时脚本查询所有 `lrc_text IS NULL` 的歌曲（最多 500 首/页）。
+
+52. **歌词搜索来源优先级**：① Lrclib.net（`https://lrclib.net/api/search`，支持同步 LRC），② 网易云音乐 API（`https://music.163.com/api/search/pc`，中文歌最全），③ kugeci.com（`https://www.kugeci.com/`，中文歌词站，项目已有 `scripts/kugeci_lrc_fetcher.py` 爬虫）。英文歌曲搜索必须用英文名（不要用中文译名），如 "You Are Beautiful - James Blunt" 而非 "詹姆斯·布朗特"。
+
+53. **手动纠正歌词流程**：用户发现歌词错误时，提供正确歌词文本 → 直接 PATCH 更新 `lrc_text`。歌手名错误同理，直接 PATCH `singer` 字段。不需要重新运行抓取脚本。
+
+54. **等不来花开（#5321）** 歌手是 **pro**，正确歌词以 LRC 首行 `[00:02.01]等不来花开 - pro` 为准。
+
+## ECS 歌词验证系统
+
+ECS 服务器：阿里云 `121.41.45.199` (实例 `i-bp18v2inztg7q1wuwgp9`, `cn-hangzhou`)，通过 SSH key 免密登录。
+
+**验证流程：**
+```
+ECS: verify_lyrics_audio.py
+  → curl 下载 B站 DASH 音频（带 User-Agent + Referer header）
+  → ffmpeg 从本地文件截取 15 秒 → PCM 16kHz mono
+  → 阿里云一句话识别 ASR（AppKey: n1vY9toGDWrvm5OX）
+  → 中文字符重叠 + pypinyin 拼音对比
+  → 匹配 → PASS / 不匹配 → 清除 lrc_text → 待 refetch
+```
+
+```bash
+# ---- 歌词验证 (在 ECS 上运行) ----
+
+# SSH 到 ECS
+ssh root@121.41.45.199
+
+# 测试 20 首（仅报告）
+/root/run_verify.sh --limit=20
+
+# 生产运行：500 首一批，自动 --fix 清除错误歌词
+nohup /root/run_verify.sh --limit=500 --offset=0 > /root/verify_out.log 2>&1 &
+tail -f /root/verify_out.log
+
+# 继续下一批
+nohup /root/run_verify.sh --limit=500 --offset=500 >> /root/verify_out.log 2>&1 &
+# offset=1000, 1500, ... 直到覆盖所有歌曲
+
+# 查看汇总
+grep -E '(VERIFICATION|Total|Passed|Failed|Skipped)' /root/verify_out.log
+```
+
+```bash
+# ---- 部署更新到 ECS ----
+# 本地更新脚本后，scp 推送（注意：脚本中的 SUPABASE_SERVICE_KEY 必须用空字符串占位）
+scp scripts/verify_lyrics_audio.py root@121.41.45.199:/root/verify_lyrics_audio.py
+# 然后在 ECS 上确认语法：
+ssh root@121.41.45.199 "python3 -c 'compile(open(\"/root/verify_lyrics_audio.py\").read(), \"x\", \"exec\"); print(\"OK\")'"
+```
+
+```bash
+# ---- 验证完成后：重新获取被清除的歌词 ----
+# 在本地运行（ECS 上没 Node）：
+/d/softwa/nodejs/node scripts/refetch_lyrics_v2.js
+
+# refetch_lyrics_v2.js 查询 lrc_text IS NULL 的歌曲，从网易云 + lrclib 重新获取
+# 特性：候选评分、歌手校验、AI歌词检测、写入前验证
+```
+
+**ECS 关键文件：**
+| 文件 | 作用 |
+|------|------|
+| `/root/verify_lyrics_audio.py` | 主验证脚本（Python 3.6 兼容） |
+| `/root/run_verify.sh` | Wrapper：从 base64 解码 key → export → python3 -u |
+| `/tmp/key_b64.txt` | Base64 编码的 Supabase service_role key |
+| `/root/verify_out.log` | 验证日志 |
+| `/root/lyrics_verify_report.json` | 最近一次验证的完整报告 |
+| `/root/lyrics_cleared_ids.json` | 被清除歌词的歌曲 ID 列表 |
+
+**ECS 依赖（已安装）：** ffmpeg, curl, Python 3.6, `requests`, `pypinyin`

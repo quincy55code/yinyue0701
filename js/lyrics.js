@@ -12,9 +12,12 @@ const Lyrics = (() => {
     let currentLineIdx = -1;
     let songTitle = '';
     let songSinger = '';
+    let currentSongId = null;
+    let lrcOffsetMs = 0;         // 歌词偏移（毫秒）
 
     // ========== DOM 引用 ==========
     let elHeader, elTitle, elSinger, elBody, elBtnMode, elBtnClose;
+    let elOffsetVal, elBtnOffsetMinus, elBtnOffsetPlus, elBtnOffsetReset;
 
     function cacheDom() {
         elHeader  = document.getElementById('lyricsHeader');
@@ -23,6 +26,11 @@ const Lyrics = (() => {
         elBody    = document.getElementById('lyricsBody');
         elBtnMode = document.getElementById('btnMode');
         elBtnClose= document.getElementById('btnClose');
+        // 偏移控件
+        elOffsetVal = document.getElementById('lyricsOffsetVal');
+        elBtnOffsetMinus = document.getElementById('btnOffsetMinus');
+        elBtnOffsetPlus = document.getElementById('btnOffsetPlus');
+        elBtnOffsetReset = document.getElementById('btnOffsetReset');
     }
 
     // ========== LRC 解析 ==========
@@ -31,16 +39,35 @@ const Lyrics = (() => {
         if (!lrcText) return [];
         const result = [];
         const lines = lrcText.split('\n');
-        const timeRe = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
+        // 匹配一行开头的一个或多个时间戳（如 [01:13.82][00:11.71]）
+        const multiTimeRe = /^((?:\[\d{2}:\d{2}\.\d{2,3}\])+)(.*)/;
+        const singleTimeRe = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+        const offsetRe = /\[offset:\s*([+-]?\d+)\]/i;
+        let offsetMs = 0;
 
         for (const line of lines) {
-            const m = line.match(timeRe);
+            // 解析 [offset:±N] 标签（单位：毫秒）
+            const offsetMatch = line.match(offsetRe);
+            if (offsetMatch) {
+                offsetMs = parseInt(offsetMatch[1], 10);
+                continue;
+            }
+
+            const m = line.match(multiTimeRe);
             if (!m) continue;
-            const minutes = parseInt(m[1], 10);
-            const seconds = parseInt(m[2], 10);
-            const ms = parseInt(m[3].padEnd(3, '0'), 10);
-            const time = minutes * 60 + seconds + ms / 1000;
-            const text = m[4].trim();
+
+            // 取第一个时间戳作为该行时间
+            const firstTimeMatch = m[1].match(singleTimeRe);
+            if (!firstTimeMatch) continue;
+            const minutes = parseInt(firstTimeMatch[1], 10);
+            const seconds = parseInt(firstTimeMatch[2], 10);
+            const ms = parseInt(firstTimeMatch[3].padEnd(3, '0'), 10);
+            let time = minutes * 60 + seconds + ms / 1000;
+            time += offsetMs / 1000;  // 应用全局偏移
+            if (time < 0) time = 0;
+
+            // 去掉所有开头的时间戳，只保留纯文本
+            const text = m[2].trim();
             if (text) {
                 result.push({ time, text });
             }
@@ -118,12 +145,15 @@ const Lyrics = (() => {
     function syncTime(currentSec) {
         if (lines.length === 0) return;
 
-        // 二分查找当前行：最后一个 time <= currentSec 的行
+        // 应用用户手动偏移
+        const adjustedSec = currentSec + lrcOffsetMs / 1000;
+
+        // 二分查找当前行：最后一个 time <= adjustedSec 的行
         let lo = 0, hi = lines.length - 1;
         let found = -1;
         while (lo <= hi) {
             const mid = (lo + hi) >> 1;
-            if (lines[mid].time <= currentSec) {
+            if (lines[mid].time <= adjustedSec) {
                 found = mid;
                 lo = mid + 1;
             } else {
@@ -137,9 +167,30 @@ const Lyrics = (() => {
         }
     }
 
+    // 歌词内存缓存（避免重复 API 调用）
+    let _lyricsCache = {};
+    const LYRICS_CACHE_MAX = 50;
+
     // ========== 歌曲切换 ==========
 
     async function loadSong(songId) {
+        currentSongId = songId;
+
+        // 检查内存缓存
+        if (_lyricsCache[songId]) {
+            const cached = _lyricsCache[songId];
+            songTitle = cached.title;
+            songSinger = cached.singer;
+            if (elTitle) elTitle.textContent = songTitle;
+            if (elSinger) elSinger.textContent = songSinger;
+            lines = cached.lines;
+            currentLineIdx = -1;
+            lrcOffsetMs = cached.offset || 0;
+            updateOffsetDisplay();
+            render();
+            return;
+        }
+
         try {
             const resp = await fetch(`/api/lyrics/${songId}`);
             if (!resp.ok) {
@@ -157,6 +208,27 @@ const Lyrics = (() => {
 
             lines = parseLRC(data.lrc_text);
             currentLineIdx = -1;
+
+            // 优先使用服务端偏移，其次 localStorage
+            if (data.lrc_offset_ms && data.lrc_offset_ms !== 0) {
+                lrcOffsetMs = data.lrc_offset_ms;
+            } else {
+                lrcOffsetMs = loadOffset(songId);
+            }
+            updateOffsetDisplay();
+
+            // 写入歌词缓存
+            _lyricsCache[songId] = {
+                title: songTitle,
+                singer: songSinger,
+                lines: lines,
+                offset: lrcOffsetMs,
+            };
+            const cacheKeys = Object.keys(_lyricsCache);
+            if (cacheKeys.length > LYRICS_CACHE_MAX) {
+                delete _lyricsCache[cacheKeys[0]];
+            }
+
             render();
         } catch (err) {
             console.error('[lyrics] 加载歌词失败:', err);
@@ -175,18 +247,18 @@ const Lyrics = (() => {
         const h = elBody.clientHeight;
 
         if (mode === 'horizontal') {
-            // 横版：active 字体按容器宽度自适应（留 16% 边距）
-            const activeSize = Math.max(16, Math.min(30, w * 0.075));
-            const nextSize = Math.max(12, activeSize * 0.55);
+            // 横版：缩小字号，与嵌入式面板接近
+            const activeSize = Math.max(16, Math.min(24, w * 0.058));
+            const nextSize = Math.max(12, activeSize * 0.6);
             const baseSize = Math.max(11, activeSize * 0.5);
             elBody.style.setProperty('--h-active-size', Math.round(activeSize) + 'px');
             elBody.style.setProperty('--h-next-size', Math.round(nextSize) + 'px');
             elBody.style.setProperty('--h-base-size', Math.round(baseSize) + 'px');
         } else {
-            // 竖版：按高度自适应（约 10 行可见）
-            const lineHeight = Math.max(28, Math.min(50, h / 10));
-            const activeSize = Math.max(14, lineHeight * 0.52);
-            const baseSize = Math.max(12, lineHeight * 0.38);
+            // 竖版：与嵌入式面板一致
+            const lineHeight = Math.max(24, Math.min(38, h / 12));
+            const activeSize = Math.max(14, Math.min(22, lineHeight * 0.48));
+            const baseSize = Math.max(12, Math.min(16, lineHeight * 0.35));
             elBody.style.setProperty('--v-active-size', Math.round(activeSize) + 'px');
             elBody.style.setProperty('--v-base-size', Math.round(baseSize) + 'px');
         }
@@ -277,6 +349,92 @@ const Lyrics = (() => {
         } catch {}
     }
 
+    // ========== 歌词偏移控制 ==========
+
+    function loadOffset(songId) {
+        if (!songId) return 0;
+        try {
+            const raw = localStorage.getItem('lrc_offset_' + songId);
+            return raw ? parseInt(raw, 10) : 0;
+        } catch (e) { return 0; }
+    }
+
+    function saveOffset(songId, offsetMs) {
+        if (!songId) return;
+        try {
+            localStorage.setItem('lrc_offset_' + songId, String(offsetMs));
+        } catch (e) { /* ignore */ }
+    }
+
+    function isOffsetAllowed() {
+        try {
+            const session = localStorage.getItem('music_player_session');
+            if (!session) return false;
+            const s = JSON.parse(session);
+            return !!(s && s.access_token);
+        } catch (e) { return false; }
+    }
+
+    function updateOffsetDisplay() {
+        // 仅登录用户可见偏移控件
+        const controls = document.getElementById('lyricsOffsetControls');
+        if (controls) {
+            controls.style.display = isOffsetAllowed() ? 'flex' : 'none';
+        }
+
+        if (!isOffsetAllowed() || !elOffsetVal) return;
+        const sec = lrcOffsetMs / 1000;
+        const sign = sec >= 0 ? '+' : '';
+        elOffsetVal.textContent = sign + sec.toFixed(1) + 's';
+        elOffsetVal.style.color = lrcOffsetMs !== 0
+            ? 'var(--accent)'
+            : 'var(--text-secondary)';
+        if (elBtnOffsetReset) {
+            elBtnOffsetReset.style.visibility = lrcOffsetMs !== 0 ? 'visible' : 'hidden';
+        }
+    }
+
+    function adjustOffset(deltaMs) {
+        if (!isOffsetAllowed()) return;
+        lrcOffsetMs += deltaMs;
+        if (lrcOffsetMs > 30000) lrcOffsetMs = 30000;
+        if (lrcOffsetMs < -30000) lrcOffsetMs = -30000;
+        updateOffsetDisplay();
+        saveOffset(currentSongId, lrcOffsetMs);
+        saveOffsetToServer(currentSongId, lrcOffsetMs);
+    }
+
+    function resetOffset() {
+        if (!isOffsetAllowed()) return;
+        lrcOffsetMs = 0;
+        updateOffsetDisplay();
+        saveOffset(currentSongId, 0);
+        saveOffsetToServer(currentSongId, 0);
+    }
+
+    async function saveOffsetToServer(songId, offsetMs) {
+        if (!songId) return;
+        try {
+            const token = localStorage.getItem('music_player_session');
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) {
+                try {
+                    const session = JSON.parse(token);
+                    if (session && session.access_token) {
+                        headers['Authorization'] = 'Bearer ' + session.access_token;
+                    }
+                } catch (e) {}
+            }
+            await fetch(`/api/lyrics/${songId}/offset`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ offset_ms: offsetMs }),
+            });
+        } catch (e) { /* 静默失败 */ }
+    }
+
+    // ========== 事件绑定 ==========
+
     function setupEvents() {
         if (elBtnClose) {
             elBtnClose.addEventListener('click', () => {
@@ -291,6 +449,17 @@ const Lyrics = (() => {
 
         if (elBtnMode) {
             elBtnMode.addEventListener('click', toggleMode);
+        }
+
+        // 偏移按钮
+        if (elBtnOffsetMinus) {
+            elBtnOffsetMinus.addEventListener('click', () => adjustOffset(-500));
+        }
+        if (elBtnOffsetPlus) {
+            elBtnOffsetPlus.addEventListener('click', () => adjustOffset(+500));
+        }
+        if (elBtnOffsetReset) {
+            elBtnOffsetReset.addEventListener('click', () => resetOffset());
         }
 
         // 点击/拖拽歌词行跳转播放进度
@@ -370,8 +539,16 @@ const Lyrics = (() => {
         // 检查 URL 参数中是否有 songId，有则自动加载
         const urlParams = new URLSearchParams(window.location.search);
         const songId = urlParams.get('songId');
+        const urlOffset = urlParams.get('offset');
         if (songId) {
-            loadSong(parseInt(songId, 10));
+            const sid = parseInt(songId, 10);
+            // 优先使用 URL 偏移参数（从主窗口传入），其次 localStorage
+            if (urlOffset !== null) {
+                lrcOffsetMs = parseInt(urlOffset, 10) || 0;
+                saveOffset(sid, lrcOffsetMs);
+                updateOffsetDisplay();
+            }
+            loadSong(sid);
         } else {
             render();
         }

@@ -418,7 +418,7 @@ body {
 
 .search-input {
     width: 100%;
-    padding: 9px 90px 9px 16px;
+    padding: 9px 90px 9px 36px;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-full);
     font-size: 14px;
@@ -439,7 +439,20 @@ body {
     color: var(--text-tertiary);
 }
 
-.search-clear {
+/* 搜索框内左侧放大镜 SVG */
+.search-magnifier {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-tertiary);
+    pointer-events: none;
+    opacity: 0.5;
+}
+.search-input:focus ~ .search-magnifier {
+    color: var(--accent);
+    opacity: 0.8;
+}
     position: absolute;
     right: 6px;
     top: 50%;
@@ -489,6 +502,37 @@ body {
 .search-confirm:hover {
     color: var(--accent);
     background: var(--bg-hover);
+}
+
+/* 搜索转圈 Spinner — 替换确认按钮位置 */
+.search-spinner {
+    position: absolute;
+    right: 36px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+.search-spinner.active {
+    display: flex;
+}
+.search-spinner::after {
+    content: '';
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border-default);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: searchSpin 0.6s linear infinite;
+}
+@keyframes searchSpin {
+    to { transform: rotate(360deg); }
+}
+.search-spinner.active + .search-confirm {
+    display: none;
 }
 
 /* 搜索历史下拉 */
@@ -632,6 +676,8 @@ body {
 
 /* ---------- 封面卡片 ---------- */
 .cover-card {
+    content-visibility: auto;
+    contain-intrinsic-size: 220px;
     background: var(--bg-surface);
     border: 1px solid transparent;
     border-radius: var(--radius-lg);
@@ -647,6 +693,7 @@ body {
     align-items: center;
     text-align: center;
     animation: cardEnter var(--duration-base) var(--ease-out) both;
+    will-change: transform;
 }
 
 .cover-card:hover {
@@ -810,6 +857,33 @@ body {
 .cover-card-add-pl:hover { transform: scale(1.15); }
 .cover-card-add-pl:active { transform: scale(0.85); }
 
+/* 复制B站链接按钮 — 左下角 */
+.cover-card-copy-link {
+    position: absolute;
+    left: var(--space-sm);
+    bottom: var(--space-sm);
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 14px;
+    border-radius: var(--radius-full);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    opacity: 0;
+    transition: opacity var(--duration-micro) var(--ease-out),
+                transform var(--duration-micro) var(--ease-spring),
+                color var(--duration-micro) var(--ease-out);
+    z-index: 2;
+}
+
+.cover-card:hover .cover-card-copy-link { opacity: 1; }
+.cover-card-copy-link:hover { transform: scale(1.15); color: var(--accent); }
+.cover-card-copy-link:active { transform: scale(0.85); }
+
 /* ============================================
    SONG LIST — 列表视图 (搜索结果)
    ============================================ */
@@ -820,6 +894,8 @@ body {
 }
 
 .song-list-item {
+    content-visibility: auto;
+    contain-intrinsic-size: 64px;
     display: flex;
     align-items: center;
     gap: var(--space-md);
@@ -904,6 +980,15 @@ body {
     text-overflow: ellipsis;
 }
 
+.song-list-collection-path {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* 列表行操作按钮 — hover 显示 */
 .song-list-actions {
     display: flex;
@@ -917,7 +1002,7 @@ body {
     opacity: 1;
 }
 
-.btn-fav, .btn-add {
+.btn-fav, .btn-add, .btn-copy-link {
     width: 34px;
     height: 34px;
     border: none;
@@ -933,12 +1018,12 @@ body {
     color: var(--text-tertiary);
 }
 
-.btn-fav:hover, .btn-add:hover {
+.btn-fav:hover, .btn-add:hover, .btn-copy-link:hover {
     transform: scale(1.15);
     color: var(--text-primary);
 }
 
-.btn-fav:active, .btn-add:active {
+.btn-fav:active, .btn-add:active, .btn-copy-link:active {
     transform: scale(0.88);
 }
 
@@ -957,6 +1042,8 @@ body {
 }
 
 .tag-card {
+    content-visibility: auto;
+    contain-intrinsic-size: 160px;
     background: var(--bg-surface);
     border: 1px solid transparent;
     border-radius: var(--radius-lg);
@@ -1452,6 +1539,56 @@ body {
     background: var(--accent-glow);
 }
 
+/* 歌词偏移控件 */
+.lyrics-offset-controls {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+    margin-right: var(--space-xs);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--duration-micro) var(--ease-out);
+}
+.lyrics-panel.open .lyrics-offset-controls {
+    opacity: 1;
+    pointer-events: auto;
+}
+.lyrics-offset-btn {
+    width: 38px;
+    height: 26px;
+    border: 1px solid var(--border-color, rgba(255,255,255,0.08));
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 10px;
+    font-family: inherit;
+    transition: all var(--duration-micro) var(--ease-out);
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.lyrics-offset-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-glow);
+}
+.lyrics-offset-val {
+    font-size: 11px;
+    color: var(--text-secondary);
+    min-width: 40px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+}
+.lyrics-offset-reset {
+    width: 26px;
+    margin-left: 2px;
+    font-size: 13px;
+}
+
 /* 歌词内容区 */
 .lyrics-panel-body {
     flex: 1;
@@ -1840,9 +1977,18 @@ body {
     border-radius: var(--radius-lg);
     padding: var(--space-xl);
     min-width: 340px;
-    max-width: 440px;
+    max-width: 580px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
     box-shadow: var(--shadow-lg);
     animation: modalIn var(--duration-base) var(--ease-out);
+}
+
+.modal-body {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
 }
 
 .modal-title {
@@ -2190,7 +2336,78 @@ body {
 }
 
 /* ============================================
-   PLAYLIST ADD BUTTON (歌单弹窗内)
+   ADD TO PLAYLIST POPUP (Hover 弹出菜单)
+   ============================================ */
+.add-to-pl-popup {
+    position: fixed;
+    background: rgba(28, 35, 32, 0.95);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    min-width: 180px;
+    max-height: 280px;
+    overflow-y: auto;
+    z-index: 120;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    padding: 6px;
+    animation: popupIn 0.15s ease-out;
+}
+
+@keyframes popupIn {
+    from { opacity: 0; transform: scale(0.92) translateY(-4px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.add-to-pl-popup::-webkit-scrollbar {
+    width: 4px;
+}
+
+.add-to-pl-popup::-webkit-scrollbar-thumb {
+    background: var(--text-tertiary);
+    border-radius: 2px;
+}
+
+.add-to-pl-item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-primary);
+    transition: background var(--duration-micro) var(--ease-out);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.add-to-pl-item:hover {
+    background: var(--bg-hover);
+}
+
+.add-to-pl-empty {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+}
+
+.add-to-pl-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 4px 0;
+}
+
+.add-to-pl-new {
+    color: var(--accent);
+    font-weight: 500;
+}
+
+.add-to-pl-new:hover {
+    background: rgba(77, 184, 141, 0.1);
+}
+
+/* ============================================
+   PLAYLIST ADD BUTTON (旧弹窗按钮，保留兼容)
    ============================================ */
 .btn-add-to-pl {
     padding: 5px 14px;
@@ -2244,14 +2461,11 @@ body {
     to { transform: rotate(360deg); }
 }
 
-.playlist-item .pl-count {
-    font-size: 12px;
-    color: var(--text-tertiary);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
+/* ============================================
+   PLAYLIST LIST — song-list 风格（废弃旧样式）
+   ============================================ */
 
+/* 保留 .btn-show-all / .btn-new-pl / .pl-name-input 全局引用 */
 .pl-count .btn-show-all {
     background: transparent;
     border: 1px solid var(--border-subtle);
@@ -2272,26 +2486,37 @@ body {
     background: rgba(77, 184, 141, 0.08);
 }
 
-.playlist-item .btn-delete {
-    opacity: 0;
-    transition: opacity var(--duration-micro) var(--ease-out);
-    width: 28px;
-    height: 28px;
+.pl-name-input {
+    flex: 1;
+    background: transparent;
     border: none;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 500;
+    padding: 2px 0;
+    outline: none;
+    font-family: inherit;
+}
+
+.btn-new-pl {
+    width: 100%;
+    padding: 10px;
+    border: 2px dashed var(--border-default);
     background: transparent;
     cursor: pointer;
+    border-radius: var(--radius-sm);
     font-size: 14px;
-    color: var(--text-tertiary);
-    border-radius: 50%;
+    font-weight: 500;
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    transition: border-color var(--duration-micro) var(--ease-out),
+                color var(--duration-micro) var(--ease-out);
+    margin-top: var(--space-sm);
 }
 
-.playlist-item:hover .btn-delete {
-    opacity: 1;
-}
-
-.playlist-item .btn-delete:hover {
-    color: #F87171;
-    background: rgba(248, 113, 113, 0.12);
+.btn-new-pl:hover {
+    border-color: var(--accent);
+    color: var(--accent);
 }
 
 .btn-new-pl {
@@ -2335,6 +2560,48 @@ body {
 .btn-play-all:hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 20px rgba(77, 184, 141, 0.4);
+}
+
+/* 歌单删除按钮 — SVG 图标，与页面风格一致 */
+.song-list-item .btn-delete-pl {
+    width: 34px;
+    height: 34px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-radius: var(--radius-full);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    transition: color var(--duration-micro) var(--ease-out),
+                background var(--duration-micro) var(--ease-out);
+}
+
+.song-list-item:hover .btn-delete-pl {
+    color: #F87171;
+    background: rgba(248, 113, 113, 0.12);
+}
+
+/* 加载转圈 */
+.loading-spinner-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 0;
+}
+
+.loading-spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--border-subtle);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
 
 .btn-play-all:active {
@@ -2400,6 +2667,30 @@ body {
 
 .pl-song-item .btn-remove-song:hover {
     color: #F87171;
+}
+
+/* remove-from-pl button in playlist songs page */
+.btn-remove-from-pl {
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-tertiary);
+    border-radius: 50%;
+    transition: all var(--duration-micro) var(--ease-out);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+}
+.song-list-item:hover .btn-remove-from-pl {
+    opacity: 1;
+}
+.btn-remove-from-pl:hover {
+    color: #F87171;
+    background: rgba(248,113,113,0.1);
 }
 
 /* Now Playing dot */

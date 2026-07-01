@@ -97,6 +97,49 @@ html, body {
     background: var(--accent-glow);
 }
 
+/* 歌词偏移控件 */
+.lyrics-offset-controls {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+    margin-right: 6px;
+}
+.lyrics-offset-btn {
+    width: 38px;
+    height: 26px;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 10px;
+    font-family: inherit;
+    transition: all var(--duration-fast) var(--ease-out);
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.lyrics-offset-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-glow);
+}
+.lyrics-offset-val {
+    font-size: 11px;
+    color: var(--text-secondary);
+    min-width: 40px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+}
+.lyrics-offset-reset {
+    width: 26px;
+    margin-left: 2px;
+    font-size: 13px;
+}
+
 /* 歌词区域 */
 .lyrics-body {
     flex: 1;

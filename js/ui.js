@@ -4,20 +4,36 @@
  * Spotify × Apple Music 融合设计：侧边栏导航 + 封面网格 + 沉浸式 Now Playing
  */
 const UI = (() => {
-    let lyricsWindow = null;
     let _currentView = 'home';
     let _defaultSongs = [];
     let _songCache = {};
     let _searchTimer = null;
 
+    // 歌曲缓存上限（LRU 淘汰）
+    const SONG_CACHE_MAX = 1000;
+    let _songCacheKeys = []; // 按添加顺序记录 key，用于淘汰最旧条目
+
+    // 歌词内存缓存（避免重复 API 调用）
+    let _lyricsCache = {};
+    const LYRICS_CACHE_MAX = 50;
+
+    // 请求去重（导航时取消相同端点的旧请求）
+    let _pendingAbortControllers = {};
+
+    // refreshAll 防抖
+    let _refreshAllPending = null;
+
     // 歌曲汇总（Collections）状态
     let _currentCollectionData = null;  // 当前查看的 collection 对象（用于 goBack）
     let _collectionTree = null;         // /api/collections 返回的完整树缓存
+    let _currentPlaylistId = null;      // 当前查看的歌单 ID
 
     // 嵌入式歌词状态
     let _embeddedLyricsOpen = false;
     let _embeddedLyricsLines = [];
     let _embeddedLyricsIdx = -1;
+    let _lrcOffsetMs = 0;          // 当前歌曲的歌词偏移（毫秒）
+    let _currentLyricsSongId = null; // 当前加载歌词的歌曲ID
 
     // 连续播放失败计数（防止无限跳曲）
     let _consecutiveErrors = 0;
@@ -46,6 +62,7 @@ const UI = (() => {
         $.searchInput = document.getElementById('searchInput');
         $.searchClear = document.getElementById('searchClear');
         $.searchDropdown = document.getElementById('searchDropdown');
+        $.searchSpinner = document.getElementById('searchSpinner');
 
         // 内容区
         $.contentArea = document.getElementById('contentArea');
@@ -101,6 +118,8 @@ const UI = (() => {
         $.lyricsPanelBody = document.getElementById('lyricsPanelBody');
         $.embeddedLyricsTitle = document.getElementById('embeddedLyricsTitle');
         $.embeddedLyricsSinger = document.getElementById('embeddedLyricsSinger');
+        $.lyricsOffsetVal = document.getElementById('lyricsOffsetVal');
+        $.lyricsOffsetControls = document.getElementById('lyricsOffsetControls');
         $.btnLyricsClose = document.getElementById('btnLyricsClose');
         $.btnLyricsPopout = document.getElementById('btnLyricsPopout');
 
@@ -131,25 +150,142 @@ const UI = (() => {
         return d.innerHTML;
     }
 
+    /** 将歌曲合并到全局缓存，超限时淘汰最旧条目 */
     function mergeToCache(songs) {
-        (songs || []).forEach(s => { _songCache[s.id] = s; });
+        if (!songs) return;
+        songs.forEach(s => {
+            if (!s || !s.id) return;
+            if (_songCache[s.id]) {
+                // 已存在，更新但不改变 key 顺序
+                _songCache[s.id] = s;
+                return;
+            }
+            // 检查容量，必要时淘汰最旧的 100 条
+            if (_songCacheKeys.length >= SONG_CACHE_MAX) {
+                const toRemove = Math.min(100, _songCacheKeys.length);
+                for (let i = 0; i < toRemove; i++) {
+                    const key = _songCacheKeys.shift();
+                    delete _songCache[key];
+                }
+            }
+            _songCache[s.id] = s;
+            _songCacheKeys.push(s.id);
+        });
     }
 
-    // ========== 嵌入式歌词：LRC 解析 ==========
+    /** 带请求去重的 fetch 包装：相同 key 的新请求自动取消旧请求 */
+    async function fetchWithDedup(key, url, options = {}) {
+        if (_pendingAbortControllers[key]) {
+            _pendingAbortControllers[key].abort();
+        }
+        const controller = new AbortController();
+        _pendingAbortControllers[key] = controller;
+        try {
+            const resp = await fetch(url, { ...options, signal: controller.signal });
+            delete _pendingAbortControllers[key];
+            return resp;
+        } catch (err) {
+            if (err.name === 'AbortError') return null;
+            delete _pendingAbortControllers[key];
+            throw err;
+        }
+    }
+
+    /** 防抖的 refreshAll（requestAnimationFrame 合并） */
+    function refreshAll() {
+        if (_refreshAllPending) return;
+        _refreshAllPending = requestAnimationFrame(() => {
+            _refreshAllPending = null;
+            // 更新侧边栏收藏计数
+            if (Auth.isLoggedIn()) {
+                const favs = PlaylistStore.getFavorites();
+                if ($.sidebarFavCount) {
+                    $.sidebarFavCount.textContent = favs.length;
+                    $.sidebarFavCount.style.display = favs.length > 0 ? '' : 'none';
+                }
+            }
+
+            // 更新封面卡片中的 fav 状态
+            document.querySelectorAll('.cover-card-fav').forEach(btn => {
+                const sid = parseInt(btn.dataset.songId);
+                if (sid) {
+                    const isFav = PlaylistStore.isFavorite(sid);
+                    btn.classList.toggle('favorited', isFav);
+                    btn.textContent = isFav ? '❤️' : '♡';
+                }
+            });
+
+            // 更新列表中的 fav 按钮
+            document.querySelectorAll('.song-list-actions .btn-fav').forEach(btn => {
+                const sid = parseInt(btn.dataset.songId);
+                if (sid) {
+                    const isFav = PlaylistStore.isFavorite(sid);
+                    btn.classList.toggle('favorited', isFav);
+                    btn.textContent = isFav ? '❤️' : '♡';
+                }
+            });
+
+            // 更新沉浸式视图
+            const currentSong = Player.getCurrentSong();
+            if (currentSong) updateNowPlayingFav(currentSong.id);
+
+            updateAuthUI();
+        });
+    }
+
+    /** 规范化B站链接：多P合集补全 ?p= 参数 */
+    function getBilibiliUrl(song) {
+        let url = song.bilibili_url;
+        if (!url) return null;
+        // 去除末尾斜杠后统一处理
+        url = url.replace(/\/+$/, '');
+        // page > 1 且 URL 里没有 ?p= 时补上
+        if (song.page > 1 && !url.includes('?p=')) {
+            url += '?p=' + song.page;
+        }
+        return url;
+    }
+
+    // ========== 管理员可见性控制 ==========
+    // 只有这些邮箱登录后能看到「复制B站链接」按钮
+    const ADMIN_EMAILS = new Set(['lexiaode@163.com', 'quincy55@163.com']);
+
+    function isAdminUser() {
+        const user = Auth.getUser();
+        return user && user.email && ADMIN_EMAILS.has(user.email);
+    }
 
     function parseLRCEmbedded(lrcText) {
         if (!lrcText) return [];
         const result = [];
         const lines = lrcText.split('\n');
-        const timeRe = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
+        // 匹配一行开头的一个或多个时间戳（如 [01:13.82][00:11.71]）
+        const multiTimeRe = /^((?:\[\d{2}:\d{2}\.\d{2,3}\])+)(.*)/;
+        const singleTimeRe = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+        const offsetRe = /\[offset:\s*([+-]?\d+)\]/i;
+        let offsetMs = 0;
         for (const line of lines) {
-            const m = line.match(timeRe);
+            // 解析 [offset:±N] 标签（单位：毫秒）
+            const offsetMatch = line.match(offsetRe);
+            if (offsetMatch) {
+                offsetMs = parseInt(offsetMatch[1], 10);
+                continue;
+            }
+            const m = line.match(multiTimeRe);
             if (!m) continue;
-            const minutes = parseInt(m[1], 10);
-            const seconds = parseInt(m[2], 10);
-            const ms = parseInt(m[3].padEnd(3, '0'), 10);
-            const time = minutes * 60 + seconds + ms / 1000;
-            const text = m[4].trim();
+
+            // 取第一个时间戳作为该行时间
+            const firstTimeMatch = m[1].match(singleTimeRe);
+            if (!firstTimeMatch) continue;
+            const minutes = parseInt(firstTimeMatch[1], 10);
+            const seconds = parseInt(firstTimeMatch[2], 10);
+            const ms = parseInt(firstTimeMatch[3].padEnd(3, '0'), 10);
+            let time = minutes * 60 + seconds + ms / 1000;
+            time += offsetMs / 1000;  // 应用全局偏移
+            if (time < 0) time = 0;
+
+            // 去掉所有开头的时间戳，只保留纯文本
+            const text = m[2].trim();
             if (text) {
                 result.push({ time, text });
             }
@@ -179,7 +315,7 @@ const UI = (() => {
         songs.forEach((song, i) => {
             const cover = getCoverUrl(song);
             const coverHTML = cover
-                ? `<img class="cover-card-img" src="${escapeHtml(cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">`
+                ? `<img class="cover-card-img" src="${escapeHtml(cover)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">`
                 : '';
             const phHTML = cover
                 ? `<div class="cover-card-placeholder" style="display:none;background:${getCoverFallbackColor(i)}">🎵</div>`
@@ -197,6 +333,7 @@ const UI = (() => {
                 <div class="cover-card-singer">${escapeHtml(song.singer || '')}</div>
                 <button type="button" class="cover-card-fav ${(song._fav || song.is_favorite) ? 'favorited' : ''}" data-action="toggle-fav" data-song-id="${song.id}">${(song._fav || song.is_favorite) ? '❤️' : '♡'}</button>
                 <button class="cover-card-add-pl" data-action="show-add-to-playlist" data-song-id="${song.id}">+</button>
+                ${isAdminUser() && song.bilibili_url ? `<button class="cover-card-copy-link" data-action="copy-bilibili-link" data-url="${escapeHtml(getBilibiliUrl(song))}" data-title="${escapeHtml(song.title)}" data-singer="${escapeHtml(song.singer || '')}" data-song-id="${song.id}" title="复制B站链接">🔗</button>` : ''}
             </div>`;
         });
         html += '</div>';
@@ -217,15 +354,17 @@ const UI = (() => {
             html += `
             <div class="song-list-item ${song.playing ? 'playing' : ''}" data-song-index="${i}" style="--stagger-index:${Math.min(i, 19)}">
                 ${cover
-                    ? `<img class="song-list-cover" src="${escapeHtml(cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">`
+                    ? `<img class="song-list-cover" src="${escapeHtml(cover)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">`
                     : ''}
                 <div class="song-list-placeholder" style="${cover ? 'display:none' : ''};background:${getCoverFallbackColor(i)}">🎵</div>
                 <div class="song-list-index">${i + 1}</div>
                 <div class="song-list-info">
                     <div class="song-list-title">${escapeHtml(song.title)}</div>
                     <div class="song-list-meta">${escapeHtml(song.singer || '')} · ${formatTime(song.duration)}</div>
+                    ${song.collection_path ? `<div class="song-list-collection-path">📂 ${escapeHtml(song.collection_path)}</div>` : ''}
                 </div>
                 <div class="song-list-actions">
+                    ${isAdminUser() && song.bilibili_url ? `<button class="btn-copy-link" data-action="copy-bilibili-link" data-url="${escapeHtml(getBilibiliUrl(song))}" data-title="${escapeHtml(song.title)}" data-singer="${escapeHtml(song.singer || '')}" data-song-id="${song.id}" title="复制B站链接">🔗</button>` : ''}
                     <button class="btn-fav ${isFav ? 'favorited' : ''}" data-action="toggle-fav" data-song-id="${song.id}">${isFav ? '❤️' : '♡'}</button>
                     <button class="btn-add" data-action="show-add-to-playlist" data-song-id="${song.id}">+</button>
                 </div>
@@ -373,6 +512,8 @@ const UI = (() => {
             navigateHome();
         } else if (_currentView === 'playlists') {
             navigateHome();
+        } else if (_currentView === 'playlist-songs') {
+            renderPlaylistsInContent();
         }
     }
 
@@ -397,6 +538,12 @@ const UI = (() => {
         $.sectionHeader.style.display = '';
         $.sectionHeader.textContent = '📊 歌曲汇总';
         setActiveSidebarNav('collection');
+
+        // 缓存已存在时直接渲染（跳过骨架屏）
+        if (_collectionTree) {
+            $.viewContainer.innerHTML = renderCollectionGrid(_collectionTree);
+            return;
+        }
         $.viewContainer.innerHTML = renderSkeletonCollectionGrid();
 
         try {
@@ -547,19 +694,72 @@ const UI = (() => {
                 <button class="btn-new-pl" data-action="new-playlist">+ 新建歌单</button>`;
             return;
         }
-        let html = '<div class="song-list">';
+        let html = '<button class="btn-new-pl" data-action="new-playlist" style="margin-bottom:12px">+ 新建歌单</button>';
+        html += '<div class="song-list">';
         pls.forEach(pl => {
+            const icon = ['📋', '🎵', '🎶', '🎸', '🎧', '🎤', '🎹', '🎻', '🥁'][Math.floor(Math.random() * 9)];
             html += `
-            <div class="playlist-item" data-action="open-playlist" data-pl-id="${pl.id}">
-                <span style="font-size:20px">📋</span>
-                <span class="pl-name" data-action="rename-playlist" data-pl-id="${pl.id}" title="双击改名">${escapeHtml(pl.name)}</span>
-                <span class="pl-count"><button class="btn-show-all" data-action="open-playlist" data-pl-id="${pl.id}">展示全部</button>${pl.song_count || 0} 首</span>
-                <button class="btn-delete" data-action="delete-playlist" data-pl-id="${pl.id}">🗑</button>
+            <div class="song-list-item" data-action="open-playlist" data-pl-id="${pl.id}" style="--stagger-index:${Math.min(pls.indexOf(pl), 19)}">
+                <div class="song-list-placeholder" style="background:linear-gradient(135deg,${getCoverFallbackColor(pl.id)},${getCoverFallbackColor(pl.id * 2)});font-size:24px;display:flex">${icon}</div>
+                <div class="song-list-info" style="cursor:pointer" data-action="open-playlist" data-pl-id="${pl.id}">
+                    <div class="song-list-title" data-action="rename-playlist-dbl" data-pl-id="${pl.id}" title="双击改名">${escapeHtml(pl.name)}</div>
+                    <div class="song-list-meta">${pl.song_count || 0} 首歌曲</div>
+                </div>
+                <div class="song-list-actions">
+                    <button class="btn-fav favorited" data-action="delete-playlist" data-pl-id="${pl.id}" title="删除歌单">🗑️</button>
+                </div>
             </div>`;
         });
         html += '</div>';
-        html += '<button class="btn-new-pl" data-action="new-playlist">+ 新建歌单</button>';
         $.viewContainer.innerHTML = html;
+    }
+
+    function navigateToPlaylistSongs(plId) {
+        _currentView = 'playlist-songs';
+        _currentPlaylistId = plId;
+        const pl = PlaylistStore.getPlaylist(plId);
+        const title = pl ? escapeHtml(pl.name) : '歌单';
+        updateViewHeader(true, '📋 ' + title);
+        setActiveSidebarNav('playlists');
+        $.viewContainer.innerHTML = renderSkeleton(6);
+        bindCardClicks();
+
+        PlaylistStore.getPlaylistSongs(plId).then(songs => {
+            if (!songs || !songs.length) {
+                $.viewContainer.innerHTML = '<div class="empty-state"><span class="empty-icon">📋</span>歌单是空的<br><small>点击歌曲旁的 + 按钮添加到歌单</small></div>';
+                return;
+            }
+            const plSongs = songs.map((s, i) => ({ ...s, _idx: i, _plSong: true }));
+            window._currentSongs = plSongs;
+            window._currentPlaylist = plId;
+            let html = '<button class="btn-play-all" data-action="play-all-pl" data-pl-id="' + plId + '">▶ 播放全部</button>';
+            html += '<div class="song-list">';
+            plSongs.forEach((song, i) => {
+                const cover = getCoverUrl(song);
+                html += `
+                <div class="song-list-item" data-song-index="${i}" style="--stagger-index:${Math.min(i, 19)}">
+                    ${cover
+                        ? `<img class="song-list-cover" src="${escapeHtml(cover)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">`
+                        : ''}
+                    <div class="song-list-placeholder" style="${cover ? 'display:none' : ''};background:${getCoverFallbackColor(i)}">🎵</div>
+                    <div class="song-list-index">${i + 1}</div>
+                    <div class="song-list-info">
+                        <div class="song-list-title">${escapeHtml(song.title)}</div>
+                        <div class="song-list-meta">${escapeHtml(song.singer || '')} · ${formatTime(song.duration)}</div>
+                    </div>
+                    <div class="song-list-actions">
+                        <button class="btn-fav ${PlaylistStore.isFavorite(song.id) ? 'favorited' : ''}" data-action="toggle-fav" data-song-id="${song.id}">${PlaylistStore.isFavorite(song.id) ? '❤️' : '♡'}</button>
+                        <button class="btn-add" data-action="show-add-to-playlist" data-song-id="${song.id}">+</button>
+                        <button class="btn-remove-from-pl" data-action="remove-from-pl" data-pl-id="${plId}" data-song-id="${song.id}" title="从歌单移除">✕</button>
+                    </div>
+                </div>`;
+            });
+            html += '</div>';
+            $.viewContainer.innerHTML = html;
+            bindCardClicks();
+        }).catch(() => {
+            $.viewContainer.innerHTML = '<div class="empty-state"><span class="empty-icon">⚠️</span>加载歌单失败</div>';
+        });
     }
 
     // ========== 播放栏 ==========
@@ -678,44 +878,11 @@ const UI = (() => {
     }
 
     // ========== 刷新 ==========
-    function refreshAll() {
-        // 更新侧边栏收藏计数
-        if (Auth.isLoggedIn()) {
-            const favs = PlaylistStore.getFavorites();
-            if ($.sidebarFavCount) {
-                $.sidebarFavCount.textContent = favs.length;
-                $.sidebarFavCount.style.display = favs.length > 0 ? '' : 'none';
-            }
-        }
-
-        // 更新封面卡片中的 fav 状态
-        document.querySelectorAll('.cover-card-fav').forEach(btn => {
-            const sid = parseInt(btn.dataset.songId);
-            if (sid) {
-                const isFav = PlaylistStore.isFavorite(sid);
-                btn.classList.toggle('favorited', isFav);
-                btn.textContent = isFav ? '❤️' : '♡';
-            }
-        });
-
-        // 更新列表中的 fav 按钮
-        document.querySelectorAll('.song-list-actions .btn-fav').forEach(btn => {
-            const sid = parseInt(btn.dataset.songId);
-            if (sid) {
-                const isFav = PlaylistStore.isFavorite(sid);
-                btn.classList.toggle('favorited', isFav);
-                btn.textContent = isFav ? '❤️' : '♡';
-            }
-        });
-
-        // 更新沉浸式视图
-        const currentSong = Player.getCurrentSong();
-        if (currentSong) updateNowPlayingFav(currentSong.id);
-
-        updateAuthUI();
-    }
-
-    // ========== Auth UI ==========
+    /**
+     * refreshAll — UI 刷新所有收藏/歌单状态。
+     * 由 PlaylistStore.onChange 回调调用。不应从事件 handler 中显式调用。
+     * 使用 requestAnimationFrame 防抖，同一帧内多次调用合并为一次。
+     */
     function updateAuthUI() {
         if (Auth.isLoggedIn()) {
             const user = Auth.getUser();
@@ -850,8 +1017,12 @@ const UI = (() => {
 
     async function doSearch(q) {
         _currentView = 'search';
-        updateViewHeader(true, '🔍 搜索: ' + q);
+        $.sectionHeader.style.display = 'none';
+        $.viewHeader.style.display = 'none';
         setActiveSidebarNav('');
+
+        // 显示 spinner
+        $.searchSpinner.classList.add('active');
 
         try {
             const resp = await fetch('/api/search?q=' + encodeURIComponent(q));
@@ -873,6 +1044,7 @@ const UI = (() => {
                         <span class="empty-icon">🔍</span>
                         没有找到 "<strong>${escapeHtml(q)}</strong>" 的相关歌曲
                     </div>`;
+                $.searchSpinner.classList.remove('active');
                 return;
             }
 
@@ -882,10 +1054,14 @@ const UI = (() => {
             bindCardClicks();
         } catch (e) {
             $.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">⚠️</span>搜索出错<br><small>${escapeHtml(e.message)}</small></div>`;
+        } finally {
+            $.searchSpinner.classList.remove('active');
         }
     }
 
     // ========== 歌词窗口 ==========
+    let lyricsWindow = null;
+
     function openLyricsWindow() {
         const song = Player.getCurrentSong();
         if (!song || !song.id) return;
@@ -909,12 +1085,30 @@ const UI = (() => {
 
     // ========== 嵌入式歌词面板 ==========
 
+    /** 嵌入式歌词：带歌词缓存的 fetch */
     async function fetchLyricsEmbedded(songId) {
+        _currentLyricsSongId = songId;
+
+        // 检查内存缓存
+        if (_lyricsCache[songId]) {
+            const cached = _lyricsCache[songId];
+            if ($.embeddedLyricsTitle) $.embeddedLyricsTitle.textContent = cached.title || '歌词';
+            if ($.embeddedLyricsSinger) $.embeddedLyricsSinger.textContent = cached.singer || '';
+            _embeddedLyricsLines = cached.lines;
+            _embeddedLyricsIdx = -1;
+            _lrcOffsetMs = cached.offset || 0;
+            updateOffsetDisplay();
+            renderLyricsEmbedded();
+            return;
+        }
+
         try {
             const resp = await fetch(`/api/lyrics/${songId}`);
             if (!resp.ok) {
                 _embeddedLyricsLines = [];
                 _embeddedLyricsIdx = -1;
+                _lrcOffsetMs = 0;
+                updateOffsetDisplay();
                 renderLyricsEmbedded();
                 return;
             }
@@ -927,6 +1121,27 @@ const UI = (() => {
             }
             _embeddedLyricsLines = parseLRCEmbedded(data.lrc_text);
             _embeddedLyricsIdx = -1;
+
+            // 优先使用服务端偏移，其次 localStorage
+            if (data.lrc_offset_ms && data.lrc_offset_ms !== 0) {
+                _lrcOffsetMs = data.lrc_offset_ms;
+            } else {
+                _lrcOffsetMs = loadLrcOffset(songId);
+            }
+            updateOffsetDisplay();
+
+            // 写入歌词缓存（限制最大条目数）
+            _lyricsCache[songId] = {
+                title: data.title || '歌词',
+                singer: data.singer || '',
+                lines: _embeddedLyricsLines,
+                offset: _lrcOffsetMs,
+            };
+            const cacheKeys = Object.keys(_lyricsCache);
+            if (cacheKeys.length > LYRICS_CACHE_MAX) {
+                delete _lyricsCache[cacheKeys[0]];
+            }
+
             renderLyricsEmbedded();
         } catch (err) {
             console.error('[lyrics-embedded] 加载歌词失败:', err);
@@ -972,12 +1187,15 @@ const UI = (() => {
     function syncLyricsEmbedded(currentSec) {
         if (_embeddedLyricsLines.length === 0) return;
 
-        // 二分查找：最后一个 time <= currentSec 的行
+        // 应用用户手动偏移
+        const adjustedSec = currentSec + _lrcOffsetMs / 1000;
+
+        // 二分查找：最后一个 time <= adjustedSec 的行
         let lo = 0, hi = _embeddedLyricsLines.length - 1;
         let found = -1;
         while (lo <= hi) {
             const mid = (lo + hi) >> 1;
-            if (_embeddedLyricsLines[mid].time <= currentSec) {
+            if (_embeddedLyricsLines[mid].time <= adjustedSec) {
                 found = mid;
                 lo = mid + 1;
             } else {
@@ -1035,15 +1253,101 @@ const UI = (() => {
     function popoutLyricsEmbedded() {
         const song = Player.getCurrentSong();
         if (!song || !song.id) return;
+        // 把当前偏移传给独立窗口（通过 URL 参数）
+        const offsetParam = _lrcOffsetMs !== 0 ? '&offset=' + _lrcOffsetMs : '';
         if (lyricsWindow && !lyricsWindow.closed) {
             lyricsWindow.focus();
             return;
         }
         lyricsWindow = window.open(
-            'lyrics.html?songId=' + song.id,
+            'lyrics.html?songId=' + song.id + offsetParam,
             'music_player_lyrics',
             'width=360,height=520'
         );
+    }
+
+    // ========== 歌词偏移控制 ==========
+
+    function loadLrcOffset(songId) {
+        if (!songId) return 0;
+        try {
+            const raw = localStorage.getItem('lrc_offset_' + songId);
+            return raw ? parseInt(raw, 10) : 0;
+        } catch (e) { return 0; }
+    }
+
+    /** 保存歌词偏移到 localStorage（带 500ms 防抖） */
+    let _lrcOffsetSaveTimer = null;
+
+    function saveLrcOffset(songId, offsetMs) {
+        if (!songId) return;
+        clearTimeout(_lrcOffsetSaveTimer);
+        _lrcOffsetSaveTimer = setTimeout(() => {
+            try {
+                localStorage.setItem('lrc_offset_' + songId, String(offsetMs));
+            } catch (e) { /* ignore */ }
+        }, 500);
+    }
+
+    function isLrcOffsetAllowed() {
+        return typeof Auth !== 'undefined' && Auth.isLoggedIn && Auth.isLoggedIn();
+    }
+
+    function updateOffsetDisplay() {
+        if (!$.lyricsOffsetControls) return;
+
+        // 仅登录用户可见偏移控件
+        const allowed = isLrcOffsetAllowed();
+        $.lyricsOffsetControls.style.display = allowed ? 'flex' : 'none';
+
+        if (!allowed || !$.lyricsOffsetVal) return;
+        const sec = _lrcOffsetMs / 1000;
+        const sign = sec >= 0 ? '+' : '';
+        $.lyricsOffsetVal.textContent = sign + sec.toFixed(1) + 's';
+        // 偏移不为0时高亮
+        $.lyricsOffsetVal.style.color = _lrcOffsetMs !== 0
+            ? 'var(--accent)'
+            : 'var(--text-secondary)';
+        // 显示/隐藏重置按钮
+        const resetBtn = document.getElementById('btnOffsetReset');
+        if (resetBtn) {
+            resetBtn.style.visibility = _lrcOffsetMs !== 0 ? 'visible' : 'hidden';
+        }
+    }
+
+    function adjustLrcOffset(deltaMs) {
+        if (!isLrcOffsetAllowed()) return;
+        _lrcOffsetMs += deltaMs;
+        // 限制在 ±30 秒内
+        if (_lrcOffsetMs > 30000) _lrcOffsetMs = 30000;
+        if (_lrcOffsetMs < -30000) _lrcOffsetMs = -30000;
+        updateOffsetDisplay();
+        saveLrcOffset(_currentLyricsSongId, _lrcOffsetMs);
+        saveLrcOffsetToServer(_currentLyricsSongId, _lrcOffsetMs);
+    }
+
+    function resetLrcOffset() {
+        if (!isLrcOffsetAllowed()) return;
+        _lrcOffsetMs = 0;
+        updateOffsetDisplay();
+        saveLrcOffset(_currentLyricsSongId, 0);
+        saveLrcOffsetToServer(_currentLyricsSongId, 0);
+    }
+
+    async function saveLrcOffsetToServer(songId, offsetMs) {
+        if (!songId) return;
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            // 附加认证头（如果已登录）
+            if (typeof Auth !== 'undefined' && Auth.getAuthHeaders) {
+                Object.assign(headers, Auth.getAuthHeaders());
+            }
+            await fetch(`/api/lyrics/${songId}/offset`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ offset_ms: offsetMs }),
+            });
+        } catch (e) { /* 静默失败，本地已保存 */ }
     }
 
     // ========== 平板底部抽屉 ==========
@@ -1100,36 +1404,37 @@ const UI = (() => {
     }
 
     // ========== 卡片点击绑定 ==========
-    function bindCardClicks() {
-        // 封面卡片点击 → 播放
-        document.querySelectorAll('.cover-card').forEach(card => {
-            card.addEventListener('click', (e) => {
-                // 不拦截按钮点击
-                if (e.target.closest('button')) return;
-                const idx = parseInt(card.dataset.songIndex);
-                if (!isNaN(idx) && window._currentSongs) {
-                    Player.playAll(window._currentSongs, idx);
-                }
-            });
-        });
-
-        // 列表行点击 → 播放
-        document.querySelectorAll('.song-list-item').forEach(item => {
-            item.addEventListener('click', (e) => {
-                if (e.target.closest('button')) return;
-                const idx = parseInt(item.dataset.songIndex);
-                if (!isNaN(idx) && window._currentSongs) {
-                    Player.playAll(window._currentSongs, idx);
-                }
-            });
-        });
-    }
+    /**
+     * bindCardClicks 已移除 — 点击逻辑已合并到 setupGlobalDelegation。
+     * 保留在 render 函数中但不执行任何操作，避免调用点报错。
+     */
+    function bindCardClicks() {}
 
     // ========== Event Delegation ==========
     function setupGlobalDelegation() {
         document.body.addEventListener('click', async (e) => {
             const btn = e.target.closest('[data-action]');
-            if (!btn) return;
+            if (!btn) {
+                // 非 data-action 点击：关闭 popup 或检测封面卡片和列表行（播放）
+                closeAddPopup();
+                const coverCard = e.target.closest('.cover-card');
+                if (coverCard && !e.target.closest('button')) {
+                    const idx = parseInt(coverCard.dataset.songIndex);
+                    if (!isNaN(idx) && window._currentSongs) {
+                        Player.playAll(window._currentSongs, idx);
+                    }
+                    return;
+                }
+                const listItem = e.target.closest('.song-list-item');
+                if (listItem && !e.target.closest('button')) {
+                    const idx = parseInt(listItem.dataset.songIndex);
+                    if (!isNaN(idx) && window._currentSongs) {
+                        Player.playAll(window._currentSongs, idx);
+                    }
+                    return;
+                }
+                return;
+            }
             const action = btn.dataset.action;
 
             // === 导航 ===
@@ -1230,15 +1535,41 @@ const UI = (() => {
                 return;
             }
 
+            // === 复制B站链接 ===
+            if (action === 'copy-bilibili-link') {
+                e.stopPropagation();
+                const url = btn.dataset.url;
+                const title = btn.dataset.title || '';
+                const singer = btn.dataset.singer || '';
+                const songId = btn.dataset.songId || '';
+                if (url) {
+                    const text = `${url} — ${title} — ${singer} (ID: ${songId})`;
+                    try {
+                        await navigator.clipboard.writeText(text);
+                        showToast('已复制：' + title);
+                    } catch {
+                        // 降级：用 textarea
+                        const ta = document.createElement('textarea');
+                        ta.value = text;
+                        ta.style.position = 'fixed';
+                        ta.style.left = '-9999px';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                        showToast('已复制：' + title);
+                    }
+                }
+                return;
+            }
+
             // === 收藏 ===
             if (action === 'toggle-fav') {
                 e.stopPropagation();
                 if (!Auth.isLoggedIn()) { showAuthModal(); return; }
                 const sid = parseInt(btn.dataset.songId);
                 await PlaylistStore.toggleFavorite(sid);
-                // 更新当前视图中的按钮状态
-                refreshAll();
-                // 更新沉浸式视图
+                // 更新沉浸式视图（onChange 回调中的 refreshAll 处理 DOM 更新）
                 if ($.npoOverlay.style.display === 'flex') {
                     const isFav = PlaylistStore.isFavorite(sid);
                     $.npoBtnFav.textContent = isFav ? '❤️ 已收藏' : '♡ 收藏';
@@ -1249,7 +1580,6 @@ const UI = (() => {
                 if (!Auth.isLoggedIn()) { showAuthModal(); return; }
                 const sid = parseInt(btn.dataset.songId);
                 await PlaylistStore.toggleFavorite(sid);
-                refreshAll();
                 return;
             }
 
@@ -1258,9 +1588,10 @@ const UI = (() => {
                 e.stopPropagation();
                 if (!Auth.isLoggedIn()) { showAuthModal(); return; }
                 const sid = parseInt(btn.dataset.songId);
-                showAddToPlaylistModal(sid);
+                showAddToPlaylistPopup(sid, btn);
                 return;
             }
+            // 非 data-action 点击关闭 popup 由最外层处理
             if (action === 'new-playlist') {
                 showCreatePlaylistModal();
                 return;
@@ -1271,7 +1602,7 @@ const UI = (() => {
             }
             if (action === 'open-playlist') {
                 const plId = parseInt(btn.dataset.plId);
-                openPlaylistModal(plId);
+                navigateToPlaylistSongs(plId);
                 return;
             }
             if (action === 'delete-playlist') {
@@ -1292,6 +1623,21 @@ const UI = (() => {
                     window._currentPlaylist = null;
                     Player.playAll(favs, 0);
                 }
+                return;
+            }
+            if (action === 'play-all-pl') {
+                const songs = window._currentSongs;
+                if (songs && songs.length) {
+                    Player.playAll(songs, 0);
+                }
+                return;
+            }
+            if (action === 'remove-from-pl') {
+                e.stopPropagation();
+                const pid = parseInt(btn.dataset.plId);
+                const sid = parseInt(btn.dataset.songId);
+                await PlaylistStore.removeFromPlaylist(pid, sid);
+                navigateToPlaylistSongs(pid);
                 return;
             }
 
@@ -1346,16 +1692,6 @@ const UI = (() => {
                 hideModal();
                 return;
             }
-            if (action === 'do-add-to-pl') {
-                const plId = parseInt(btn.dataset.plId);
-                const sid = parseInt(btn.dataset.songId);
-                btn.classList.add('loading');
-                btn.disabled = true;
-                await PlaylistStore.addToPlaylist(plId, sid);
-                hideModal();
-                showToast('已添加到歌单');
-                return;
-            }
             if (action === 'new-playlist-from-add') {
                 const sid = parseInt(btn.dataset.songId);
                 showCreatePlaylistModal(sid);
@@ -1365,7 +1701,7 @@ const UI = (() => {
 
         // 双击歌单名 → 重命名
         document.body.addEventListener('dblclick', (e) => {
-            const btn = e.target.closest('[data-action="rename-playlist"]');
+            const btn = e.target.closest('[data-action="rename-playlist"], [data-action="rename-playlist-dbl"]');
             if (!btn) return;
             e.stopPropagation();
             const plId = parseInt(btn.dataset.plId);
@@ -1479,6 +1815,20 @@ const UI = (() => {
         }
         if ($.btnLyricsPopout) {
             $.btnLyricsPopout.addEventListener('click', () => popoutLyricsEmbedded());
+        }
+
+        // 歌词偏移按钮
+        const btnOffsetMinus = document.getElementById('btnOffsetMinus');
+        const btnOffsetPlus = document.getElementById('btnOffsetPlus');
+        const btnOffsetReset = document.getElementById('btnOffsetReset');
+        if (btnOffsetMinus) {
+            btnOffsetMinus.addEventListener('click', () => adjustLrcOffset(-500));
+        }
+        if (btnOffsetPlus) {
+            btnOffsetPlus.addEventListener('click', () => adjustLrcOffset(+500));
+        }
+        if (btnOffsetReset) {
+            btnOffsetReset.addEventListener('click', () => resetLrcOffset());
         }
 
         // 歌词面板：点击/拖拽歌词行跳转播放进度
@@ -1881,18 +2231,88 @@ const UI = (() => {
         render();
     }
 
-    // ========== Add to Playlist Modal ==========
-    function showAddToPlaylistModal(songId) {
-        const pls = PlaylistStore.getPlaylists();
-        const song = _songCache[songId] || { title: '歌曲 #' + songId };
-        const listItems = pls.length
-            ? pls.map(pl => `<div class="playlist-item"><span style="font-size:18px">📋</span><span class="pl-name">${escapeHtml(pl.name)}</span><span class="pl-count">${pl.song_count || 0} 首</span><button class="btn-add-to-pl" data-action="do-add-to-pl" data-pl-id="${pl.id}" data-song-id="${songId}">添加</button></div>`).join('')
-            : '<div style="padding:8px;color:var(--text-tertiary)">暂无歌单</div>';
+    // ========== Add to Playlist Popup (Hover 弹出) ==========
+    let _addPopup = null;
+    let _addPopupTimer = null;
 
-        showModal('添加到歌单',
-            `<p style="margin-bottom:12px;color:var(--text-secondary);font-size:14px">"${escapeHtml(song.title)}"</p>${listItems}`,
-            `<button class="btn btn-secondary" data-action="close-modal">关闭</button><button class="btn btn-primary" data-action="new-playlist-from-add" data-song-id="${songId}">+ 新建歌单</button>`
-        );
+    function showAddToPlaylistPopup(songId, anchorEl) {
+        closeAddPopup();
+
+        const pls = PlaylistStore.getPlaylists();
+        const popup = document.createElement('div');
+        popup.className = 'add-to-pl-popup';
+        popup.dataset.songId = songId;
+
+        let html = '';
+        if (pls.length) {
+            html += pls.map(pl =>
+                `<div class="add-to-pl-item" data-action="add-to-pl-item" data-pl-id="${pl.id}" data-song-id="${songId}">${escapeHtml(pl.name)}</div>`
+            ).join('');
+        } else {
+            html += '<div class="add-to-pl-empty">暂无歌单</div>';
+        }
+        html += '<div class="add-to-pl-divider"></div>';
+        html += `<div class="add-to-pl-item add-to-pl-new" data-action="new-playlist-from-add" data-song-id="${songId}">+ 新建歌单</div>`;
+        popup.innerHTML = html;
+
+        // 定位
+        const rect = anchorEl.getBoundingClientRect();
+        popup.style.left = Math.min(rect.right + 4, window.innerWidth - 200) + 'px';
+        popup.style.top = rect.top + 'px';
+
+        // 如果弹出层超出底部，向上偏移
+        document.body.appendChild(popup);
+        requestAnimationFrame(() => {
+            const popupRect = popup.getBoundingClientRect();
+            if (popupRect.bottom > window.innerHeight) {
+                popup.style.top = (rect.top - popupRect.height - 4) + 'px';
+            }
+        });
+
+        // 点击项处理
+        popup.addEventListener('click', async (e) => {
+            const item = e.target.closest('.add-to-pl-item');
+            if (!item) return;
+
+            const action = item.dataset.action;
+
+            if (action === 'add-to-pl-item') {
+                e.stopPropagation();
+                if (!Auth.isLoggedIn()) { closeAddPopup(); showAuthModal(); return; }
+                const plId = parseInt(item.dataset.plId);
+                const sid = parseInt(item.dataset.songId);
+                await PlaylistStore.addToPlaylist(plId, sid);
+                closeAddPopup();
+                showToast('已添加到歌单');
+                return;
+            }
+
+            if (action === 'new-playlist-from-add') {
+                e.stopPropagation();
+                closeAddPopup();
+                const sid = parseInt(item.dataset.songId);
+                showCreatePlaylistModal(sid);
+                return;
+            }
+        });
+
+        // Hover 管理
+        popup.addEventListener('mouseenter', () => {
+            clearTimeout(_addPopupTimer);
+        });
+        popup.addEventListener('mouseleave', () => {
+            _addPopupTimer = setTimeout(closeAddPopup, 300);
+        });
+
+        _addPopup = popup;
+    }
+
+    function closeAddPopup() {
+        clearTimeout(_addPopupTimer);
+        if (_addPopup) {
+            _addPopup.remove();
+            _addPopup = null;
+        }
     }
 
     function showCreatePlaylistModal(pendingSongId) {
@@ -1911,6 +2331,13 @@ const UI = (() => {
                     showToast('已添加到歌单');
                 }
                 if (_currentView === 'playlists') renderPlaylistsInContent();
+                if (_currentView === 'playlist-songs' && _currentPlaylistId) {
+                    PlaylistStore.getPlaylistSongs(_currentPlaylistId).then(songs => {
+                        if (!songs) return;
+                        const plSongs = songs.map((s, i) => ({ ...s, _idx: i, _plSong: true }));
+                        window._currentSongs = plSongs;
+                    });
+                }
             } catch (e) {
                 alert(e.message);
             }
@@ -1998,13 +2425,15 @@ const UI = (() => {
     function openPlaylistModal(plId) {
         const pl = PlaylistStore.getPlaylist(plId);
         if (!pl) return;
+        // 先显示加载中的弹窗
+        showModal(pl.name,
+            `<div class="loading-spinner-wrap"><div class="loading-spinner"></div></div>`,
+            `<button class="btn btn-secondary" data-action="close-modal">关闭</button>`
+        );
+
         PlaylistStore.getPlaylistSongs(plId).then(songs => {
             const songList = songs.length
-                ? songs.map((s, i) => `
-                    <div class="pl-song-item" data-song-index="${i}">
-                        <span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(s.title)} - ${escapeHtml(s.singer || '')}</span>
-                        <button class="btn-remove-song" data-action="remove-from-pl" data-pl-id="${plId}" data-song-id="${s.id}">✕</button>
-                    </div>`).join('')
+                ? renderSongList(songs.map((s, i) => ({ ...s, _idx: i })))
                 : '<div class="empty-state" style="padding:20px"><span class="empty-icon">📋</span>歌单是空的</div>';
 
             showModal(pl.name,
@@ -2012,19 +2441,7 @@ const UI = (() => {
                 `<button class="btn btn-secondary" data-action="close-modal">关闭</button>`
             );
 
-            // 绑定事件
-            document.querySelectorAll('[data-action="play-pl"]').forEach(b => {
-                b.addEventListener('click', async () => {
-                    const pid = parseInt(b.dataset.plId);
-                    const s = await PlaylistStore.getPlaylistSongs(pid);
-                    if (s.length) {
-                        window._currentSongs = s;
-                        window._currentPlaylist = pid;
-                        Player.playAll(s, 0);
-                        hideModal();
-                    }
-                });
-            });
+            // 绑定事件——关闭和播放全部也走 data-action 全局委托，只需绑移除歌单和点击播放
             document.querySelectorAll('[data-action="remove-from-pl"]').forEach(b => {
                 b.addEventListener('click', async () => {
                     const pid = parseInt(b.dataset.plId);
@@ -2033,14 +2450,14 @@ const UI = (() => {
                     openPlaylistModal(pid); // 刷新
                 });
             });
-            document.querySelectorAll('.pl-song-item').forEach((item, i) => {
+            // 绑定歌单弹窗内的歌曲点击事件（使用 renderSongList 生成的 .song-list-item）
+            document.querySelectorAll('.modal-overlay.show .song-list-item').forEach((item, i) => {
                 item.addEventListener('click', (e) => {
                     if (e.target.closest('button')) return;
-                    const idx = parseInt(item.dataset.songIndex);
-                    if (!isNaN(idx) && songs.length) {
+                    if (!isNaN(i) && songs.length) {
                         window._currentSongs = songs;
                         window._currentPlaylist = plId;
-                        Player.playAll(songs, idx);
+                        Player.playAll(songs, i);
                         hideModal();
                     }
                 });
@@ -2153,6 +2570,7 @@ const UI = (() => {
         // Auth 状态变化 → 更新 UI
         Auth.onChange(() => {
             updateAuthUI();
+            updateOffsetDisplay();
             if (Auth.isLoggedIn()) {
                 PlaylistStore.loadFromServer();
             }

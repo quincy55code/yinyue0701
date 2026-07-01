@@ -6,7 +6,8 @@
     <title>🎵 青春旋律 — 音乐播放器</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
     <link rel="stylesheet" href="css/style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎵</text></svg>">
 </head>
@@ -109,8 +110,10 @@
                 <form class="search-wrap" id="searchWrap" autocomplete="off">
                     <!-- 隐藏的 autofill 陷阱：防止 Chrome 把邮箱填入搜索框 -->
                     <input type="email" style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;left:-9999px" tabindex="-1" aria-hidden="true" autocomplete="email">
-                    <input type="search" class="search-input" id="searchInput" name="search" placeholder="🔍 搜索歌曲、歌手…" autocomplete="off">
+                    <input type="text" class="search-input" id="searchInput" name="search" placeholder="搜索歌曲、歌手…" autocomplete="off">
+                    <svg class="search-magnifier" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     <button type="button" class="search-clear" id="searchClear" style="display:none">✕</button>
+                    <span class="search-spinner" id="searchSpinner"></span>
                     <button type="button" class="search-confirm" id="searchConfirm">确认</button>
                     <div class="search-history-dropdown" id="searchDropdown" style="display:none"></div>
                 </form>
@@ -207,6 +210,12 @@
                     <span class="lyrics-panel-title" id="embeddedLyricsTitle">歌词</span>
                     <span class="lyrics-panel-singer" id="embeddedLyricsSinger"></span>
                 </div>
+                <div class="lyrics-offset-controls" id="lyricsOffsetControls">
+                    <button class="lyrics-offset-btn" id="btnOffsetMinus" title="歌词提前0.5秒">−0.5s</button>
+                    <span class="lyrics-offset-val" id="lyricsOffsetVal">±0.0s</span>
+                    <button class="lyrics-offset-btn" id="btnOffsetPlus" title="歌词延后0.5秒">+0.5s</button>
+                    <button class="lyrics-offset-btn lyrics-offset-reset" id="btnOffsetReset" title="重置偏移">↺</button>
+                </div>
                 <button class="lyrics-panel-btn" id="btnLyricsPopout" title="弹出独立窗口">↗</button>
                 <button class="lyrics-panel-btn" id="btnLyricsClose" title="关闭歌词面板">✕</button>
             </div>
@@ -248,7 +257,7 @@
     <script src="js/auth.js"></script>
     <script src="js/playlist.js"></script>
     <script src="js/player.js"></script>
-    <script src="js/ui.js"></script>
+    <script src="js/ui.js?v=20260703"></script>
     <script>
         // 启动应用
         (async function bootstrap() {

@@ -70,6 +70,8 @@ const PlaylistStore = (() => {
         if (!isLoggedIn()) return;
         // 乐观更新：立即加入缓存
         const song = lookupSong(songId);
+        // 检查是否获取到完整歌曲数据（有 duration 等字段）
+        const hasFullData = song && song.title && song.duration !== undefined;
         if (!_favoritesCache.some(f => String(f.id) === String(songId))) {
             _favoritesCache = [song, ..._favoritesCache];
         }
@@ -82,6 +84,10 @@ const PlaylistStore = (() => {
             });
             if (!resp.ok) {
                 // 失败 → 回滚 + 重新加载
+                await refreshFavorites();
+                notify();
+            } else if (!hasFullData) {
+                // 成功但数据不完整 → 从服务器加载完整数据
                 await refreshFavorites();
                 notify();
             }
@@ -263,12 +269,14 @@ const PlaylistStore = (() => {
                 body: JSON.stringify({ song_id: parseInt(songId) }),
             });
             if (!resp.ok) {
-                await refreshPlaylists();
+                // 回滚乐观更新
+                if (pl) pl.song_count = Math.max(0, (pl.song_count || 1) - 1);
                 notify();
             }
         } catch (e) {
             console.error('[playlist] addToPlaylist:', e);
-            await refreshPlaylists();
+            // 回滚乐观更新
+            if (pl) pl.song_count = Math.max(0, (pl.song_count || 1) - 1);
             notify();
         }
     }

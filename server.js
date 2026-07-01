@@ -4,6 +4,9 @@
  */
 
 const express = require('express');
+const compression = require('compression');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 const path = require('path');
 
@@ -83,13 +86,51 @@ mailTransporter.verify((err) => {
 });
 
 const app = express();
-app.use(express.json({ limit: '5mb' }));   // 解析 POST JSON body（提高限制以支持 base64 头像上传）
+app.use(express.json({ limit: '5mb' }));
+app.use(compression()); // HTTP 压缩（gzip/brotli）
+
+// 安全头
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy: false, // 前端有内联 JS，不强制 CSP
+}));
+
+// 全局限流：每 IP 每分钟 100 请求
+const limiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: '请求过于频繁，请稍后再试' },
+});
+app.use(limiter);
+
+// 敏感端点限流
+const authLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: '请求过于频繁，请 60 秒后再试' },
+});
+const streamLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: '请求过于频繁，请稍后再试' },
+});
 const PORT = 8765;
 
-// CORS — 允许前端跨域访问
+// CORS — 允许前端跨域访问（生产环境通过环境变量限制域名）
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 app.use((_req, res, next) => {
+    if (ALLOWED_ORIGIN !== '*') {
+        res.set('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+    } else {
+        res.set('Access-Control-Allow-Origin', '*');
+    }
     res.set({
-        'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': '*',
     });
@@ -97,13 +138,30 @@ app.use((_req, res, next) => {
     next();
 });
 
-// 提供静态文件（仅限必要的目录和文件）
-app.use('/public', express.static(path.join(__dirname, 'public')));
-app.use('/js', express.static(path.join(__dirname, 'js')));
-app.use('/css', express.static(path.join(__dirname, 'css')));
+// 提供静态文件（仅限必要的目录和文件，添加长期缓存头）
+app.use('/js', express.static(path.join(__dirname, 'js'), { maxAge: '7d', etag: true }));
+app.use('/css', express.static(path.join(__dirname, 'css'), { maxAge: '7d', etag: true }));
+app.use('/public', express.static(path.join(__dirname, 'public'), { maxAge: '30d', etag: true }));
 app.get('/index.html', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/lyrics.html', (_req, res) => res.sendFile(path.join(__dirname, 'lyrics.html')));
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+
+// ========== LRC 偏移存储（服务端 JSON 文件，仅登录用户可修改）==========
+
+const LRC_OFFSETS_FILE = path.join(__dirname, 'lrc_offsets.json');
+
+function loadLrcOffsets() {
+    try {
+        if (fs.existsSync(LRC_OFFSETS_FILE)) {
+            return JSON.parse(fs.readFileSync(LRC_OFFSETS_FILE, 'utf-8'));
+        }
+    } catch (e) { console.error('[lrc-offsets] 读取失败:', e.message); }
+    return {}; // { "songId": offset_ms }
+}
+
+function saveLrcOffsets(offsets) {
+    fs.writeFileSync(LRC_OFFSETS_FILE, JSON.stringify(offsets, null, 2), 'utf-8');
+}
 
 // ========== Auth 中间件 ==========
 async function authMiddleware(req, res, next) {
@@ -112,6 +170,33 @@ async function authMiddleware(req, res, next) {
         return res.status(401).json({ error: '请先登录' });
     }
     const token = authHeader.slice(7);
+
+    // 尝试本地验签（支持我们自定义签发的 token）
+    const parts = token.split('.');
+    if (parts.length === 3) {
+        const [header64, payload64, signature] = parts;
+        const expectedSig = crypto.createHmac('sha256', JWT_SECRET)
+            .update(`${header64}.${payload64}`)
+            .digest('base64url');
+        const sigBuf = Buffer.from(signature, 'base64url');
+        const expBuf = Buffer.from(expectedSig, 'base64url');
+        if (sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf)) {
+            // 本地验签通过
+            try {
+                const payload = JSON.parse(Buffer.from(payload64, 'base64url').toString('utf-8'));
+                if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+                    return res.status(401).json({ error: '登录已过期，请重新登录' });
+                }
+                req.user = { id: payload.sub, email: payload.email };
+                return next();
+            } catch {
+                // payload 解析失败，降级到远程验证
+            }
+        }
+    }
+
+    // 本地验签失败 → fallback 到 Supabase Auth 远程验证
+    // （兼容旧版 Supabase 内部密钥签发的 access_token）
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) {
         return res.status(401).json({ error: '登录已过期，请重新登录' });
@@ -134,6 +219,7 @@ function formatSong(s) {
         end_time: hasSegment ? s.end_seconds : null,
         page_duration: s.duration_seconds ?? null,
         cover_url: s.cover_url || null,
+        bilibili_url: s.bilibili_url || null,
         duration: hasSegment
             ? (s.end_seconds - s.start_seconds)
             : (s.duration_seconds ?? null),
@@ -181,6 +267,53 @@ async function attachTags(songs) {
     return songs.map(s => ({ ...s, tags: songTagsMap[s.id] || [] }));
 }
 
+// 批量查询歌曲所属分类路径（通过 bvid 关联 collection_items → collections）
+async function attachCollectionPaths(songs) {
+    if (!songs || songs.length === 0) return songs;
+
+    // 收集所有非空 bvid
+    const bvids = [...new Set(songs.map(s => s.bvid).filter(Boolean))];
+    if (bvids.length === 0) return songs.map(s => ({ ...s, collection_path: null }));
+
+    // 第一步：查 collection_items，获取 (bvid, collection_id, title)
+    const { data: items } = await supabase
+        .from('collection_items')
+        .select('bvid, collection_id, title')
+        .in('bvid', bvids);
+
+    if (!items || items.length === 0) {
+        return songs.map(s => ({ ...s, collection_path: null }));
+    }
+
+    // 第二步：查 collections，获取 (id, name)
+    const colIds = [...new Set(items.map(it => it.collection_id))];
+    const { data: cols } = await supabase
+        .from('collections')
+        .select('id, name')
+        .in('id', colIds);
+
+    // 构建 collection_id → name 映射
+    const colNameMap = {};
+    for (const c of (cols || [])) {
+        colNameMap[c.id] = c.name;
+    }
+
+    // 构建 bvid → collection_path 映射（取第一个匹配）
+    const pathMap = {};
+    for (const it of items) {
+        if (pathMap[it.bvid]) continue; // 已有一条路径，跳过
+        const colName = colNameMap[it.collection_id];
+        if (colName) {
+            pathMap[it.bvid] = `${colName} > ${it.title}`;
+        }
+    }
+
+    return songs.map(s => ({
+        ...s,
+        collection_path: pathMap[s.bvid] || null
+    }));
+}
+
 // ========== 原硬编码歌曲（备份） ==========
 // const SONGS = [
 //     { id: 1, title: "离别开出花", bvid: "BV1pY5q6jECZ", page: 1, ... },
@@ -208,6 +341,26 @@ function cidCacheGet(bvid, page) {
 function cidCacheSet(bvid, page, cid) {
     cidCache.set(cacheKey(bvid, page), { value: cid, expiresAt: Date.now() + CID_CACHE_TTL });
 }
+
+// ========== API 响应内存缓存（tags/collections 等低频变化数据） ==========
+const apiCache = new Map();
+const API_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
+
+function apiCacheGet(key) {
+    const entry = apiCache.get(key);
+    if (entry && Date.now() < entry.expiresAt) return entry.data;
+    apiCache.delete(key);
+    return null;
+}
+
+function apiCacheSet(key, data) {
+    apiCache.set(key, { data, expiresAt: Date.now() + API_CACHE_TTL });
+}
+
+// 清除缓存的钩子：当 postMessage 收到 flush-cache 消息时清除
+process.on('message', (msg) => {
+    if (msg === 'flush-cache') apiCache.clear();
+});
 
 // playurl 缓存：bvid:cid → playurl API 响应（2 分钟 TTL，DASH URL 有效期 ~10 分钟）
 const playurlCache = new Map();
@@ -356,17 +509,10 @@ app.get('/api/search', async (req, res) => {
 
         const songs = (data || []).map(formatSong).filter(Boolean);
         const songsWithTags = await attachTags(songs);
-
-        // 按歌名去重，同一歌名只保留第一条
-        const seen = new Set();
-        const deduped = songsWithTags.filter(s => {
-            if (seen.has(s.title)) return false;
-            seen.add(s.title);
-            return true;
-        });
+        const songsWithPaths = await attachCollectionPaths(songsWithTags);
 
         res.json({
-            results: deduped,
+            results: songsWithPaths,
             query: q,
         });
     } catch (err) {
@@ -430,14 +576,27 @@ app.get('/api/tags', async (_req, res) => {
             return res.json({ tags: [] });
         }
 
-        // 批量查询所有标签的歌曲数
-        const { data: stRows } = await supabase
-            .from('song_tags')
-            .select('tag_id');
+        // 批量查询所有标签的歌曲数（优先使用 RPC 函数，回退到 JS 计数）
+        let countMap = {};
+        try {
+            const { data: countRows, error: rpcErr } = await supabase.rpc('get_tag_song_counts');
+            if (!rpcErr && countRows) {
+                for (const row of countRows) {
+                    countMap[row.tag_id] = parseInt(row.cnt, 10);
+                }
+            } else {
+                throw new Error(rpcErr?.message || 'RPC failed');
+            }
+        } catch (rpcErr) {
+            // RPC 函数不存在时回退到传统 JS 计数
+            console.warn('[tags] RPC fallback:', rpcErr.message);
+            const { data: stRows } = await supabase
+                .from('song_tags')
+                .select('tag_id');
 
-        const countMap = {};
-        for (const row of (stRows || [])) {
-            countMap[row.tag_id] = (countMap[row.tag_id] || 0) + 1;
+            for (const row of (stRows || [])) {
+                countMap[row.tag_id] = (countMap[row.tag_id] || 0) + 1;
+            }
         }
 
         // 分离顶级标签和子标签
@@ -475,6 +634,12 @@ app.get('/api/tags', async (_req, res) => {
 /** GET /api/collections — 歌曲汇总树（一级分类 + 子标签 + 歌曲计数） */
 app.get('/api/collections', async (_req, res) => {
     try {
+        // 检查缓存
+        const cached = apiCacheGet('collections');
+        if (cached) {
+            return res.json(cached);
+        }
+
         // 1. 查询所有一级分类
         const { data: cols, error: colErr } = await supabase
             .from('collections')
@@ -536,8 +701,10 @@ app.get('/api/collections', async (_req, res) => {
             };
         });
 
+        const result = { collections };
         res.set('Cache-Control', 'private, max-age=300');
-        res.json({ collections });
+        apiCacheSet('collections', result);
+        res.json(result);
     } catch (err) {
         console.error('[collections]', err.message);
         res.status(500).json({ error: '获取分类失败' });
@@ -545,15 +712,15 @@ app.get('/api/collections', async (_req, res) => {
 });
 
 /** GET /api/stream/:songId — 代理 B站 DASH 音频流 */
-app.get('/api/stream/:songId', async (req, res) => {
+app.get('/api/stream/:songId', streamLimiter, async (req, res) => {
     const songId = parseInt(req.params.songId);
 
-    // 从 Supabase 查询歌曲元数据
+    // 从 Supabase 查询歌曲元数据（只查询列需要的字段，避免传输 lrc_text 等大字段）
     let song;
     try {
         const { data, error } = await supabase
             .from('songs')
-            .select('*')
+            .select('id,bvid,page,start_seconds,end_seconds,duration_seconds')
             .eq('id', songId)
             .single();
 
@@ -762,15 +929,57 @@ app.get('/api/lyrics/:songId', async (req, res) => {
             return res.status(404).json({ error: '歌曲不存在' });
         }
 
+        // 读取服务端已保存的偏移（仅管理员通过认证接口修改）
+        const offsets = loadLrcOffsets();
+        const lrcOffsetMs = offsets[songId] || 0;
+
         res.json({
             songId: data.id,
             title: data.title,
             singer: data.singer || '',
             lrc_text: data.lrc_text || null,
+            lrc_offset_ms: lrcOffsetMs,
         });
     } catch (err) {
         console.error('[lyrics]', err.message);
         res.status(500).json({ error: '获取歌词失败' });
+    }
+});
+
+/** POST /api/lyrics/:songId/offset — 保存歌词偏移（仅限管理员） */
+const LRC_OFFSET_ADMINS = new Set(['lexiaode@163.com', 'quincy55@163.com']);
+
+app.post('/api/lyrics/:songId/offset', authMiddleware, async (req, res) => {
+    // 仅限指定邮箱
+    if (!LRC_OFFSET_ADMINS.has(req.user.email)) {
+        return res.status(403).json({ error: '仅限管理员修改歌词偏移' });
+    }
+
+    const songId = parseInt(req.params.songId);
+    if (!songId || songId < 1) {
+        return res.status(400).json({ error: '无效的歌曲 ID' });
+    }
+
+    const { offset_ms } = req.body;
+    if (typeof offset_ms !== 'number' || !isFinite(offset_ms)) {
+        return res.status(400).json({ error: 'offset_ms 必须是数字' });
+    }
+
+    // 限制在 ±30 秒
+    const clamped = Math.max(-30000, Math.min(30000, Math.round(offset_ms)));
+
+    try {
+        const offsets = loadLrcOffsets();
+        if (clamped === 0) {
+            delete offsets[songId]; // 删除0偏移的条目，保持文件整洁
+        } else {
+            offsets[songId] = clamped;
+        }
+        saveLrcOffsets(offsets);
+        res.json({ ok: true, songId, lrc_offset_ms: clamped });
+    } catch (err) {
+        console.error('[lyrics-offset]', err.message);
+        res.status(500).json({ error: '保存偏移失败' });
     }
 });
 
@@ -819,8 +1028,8 @@ app.post('/api/auth/send-code', async (req, res) => {
             return res.status(500).json({ error: '验证码生成失败' });
         }
 
-        // 发送邮件
-        await mailTransporter.sendMail({
+        // 发送邮件（非阻塞 — 用户无需等待邮件发送完成）
+        mailTransporter.sendMail({
             from: '"青春旋律" <lexiaode@163.com>',
             to: email,
             subject: '青春旋律 - 登录验证码',
@@ -833,7 +1042,7 @@ app.post('/api/auth/send-code', async (req, res) => {
                 <hr style="border-color:rgba(255,255,255,0.05);margin:20px 0">
                 <p style="font-size:12px;color:#5D6B62">—— 青春旋律音乐播放器</p>
             </div>`,
-        });
+        }).catch(err => console.error('[send-code] 邮件发送失败:', err.message));
 
         res.json({ ok: true });
     } catch (err) {
@@ -1764,13 +1973,22 @@ app.post('/api/playlists/:id/songs', authMiddleware, async (req, res) => {
     }
 
     try {
-        // 验证歌单所有权
-        const { data: pl } = await supabaseAdmin
-            .from('playlists')
-            .select('id, user_id')
-            .eq('id', plId)
-            .single();
+        // 并行：验证歌单所有权 + upsert（无网络串行等待）
+        const [plResult, upsertResult] = await Promise.all([
+            supabaseAdmin
+                .from('playlists')
+                .select('id, user_id')
+                .eq('id', plId)
+                .single(),
+            supabaseAdmin
+                .from('playlist_songs')
+                .upsert(
+                    { playlist_id: plId, song_id: songId },
+                    { onConflict: 'playlist_id,song_id' }
+                ),
+        ]);
 
+        const pl = plResult.data;
         if (!pl) {
             return res.status(404).json({ error: '歌单不存在' });
         }
@@ -1778,22 +1996,7 @@ app.post('/api/playlists/:id/songs', authMiddleware, async (req, res) => {
             return res.status(403).json({ error: '无权操作此歌单' });
         }
 
-        // 获取当前最大 sort_order
-        const { data: lastItem } = await supabaseAdmin
-            .from('playlist_songs')
-            .select('sort_order')
-            .eq('playlist_id', plId)
-            .order('sort_order', { ascending: false })
-            .limit(1);
-
-        const nextOrder = (lastItem && lastItem.length > 0) ? lastItem[0].sort_order + 1 : 0;
-
-        const { error } = await supabaseAdmin
-            .from('playlist_songs')
-            .upsert(
-                { playlist_id: plId, song_id: songId, sort_order: nextOrder },
-                { onConflict: 'playlist_id,song_id' }
-            );
+        const { error } = upsertResult;
 
         if (error) {
             console.error('[playlist add song]', error.message);
@@ -1862,7 +2065,7 @@ app.post('/api/feedback', async (req, res) => {
         const timeStr = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
         const contactInfo = contact ? `\n联系方式：${contact}` : '';
 
-        await mailTransporter.sendMail({
+        mailTransporter.sendMail({
             from: '"青春旋律反馈" <lexiaode@163.com>',
             to: 'lexiaode@163.com',
             subject: `[青春旋律反馈] 来自用户的意见 (${timeStr})`,
@@ -1875,7 +2078,7 @@ app.post('/api/feedback', async (req, res) => {
                 <hr style="border-color:rgba(255,255,255,0.05);margin:20px 0">
                 <p style="font-size:12px;color:#5D6B62">—— 青春旋律音乐播放器</p>
             </div>`,
-        });
+        }).catch(err => console.error('[feedback] 邮件发送失败:', err.message));
 
         res.json({ ok: true });
     } catch (err) {
