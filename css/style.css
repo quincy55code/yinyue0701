@@ -619,6 +619,8 @@ body {
     gap: var(--space-md);
     padding-top: var(--space-lg);
     margin-bottom: var(--space-lg);
+    margin-left: 0;
+    padding-left: 0;
 }
 
 .btn-back {
@@ -653,6 +655,8 @@ body {
 
 .section-header {
     padding: var(--space-lg) 0 var(--space-md);
+    margin-left: 0;
+    padding-left: 0;
     font-size: 11px;
     font-weight: 600;
     color: var(--text-tertiary);
@@ -662,7 +666,8 @@ body {
 
 /* 视图容器 */
 .view-container {
-    /* 由具体视图决定布局 */
+    width: 100%;
+    box-sizing: border-box;
 }
 
 /* ============================================
@@ -1059,6 +1064,8 @@ body {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: var(--space-lg);
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 .tag-card {
@@ -3155,6 +3162,34 @@ body {
 @media (max-width: 1300px) {
     .tag-grid {
         grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+@media (max-width: 1023px) {
+    .tag-grid {
+        grid-template-columns: repeat(3, 1fr);
+        gap: var(--space-md);
+    }
+
+    .tag-card {
+        min-height: 140px;
+        padding: 20px var(--space-sm) 22px;
+    }
+}
+
+@media (max-width: 767px) {
+    .tag-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: var(--space-md);
+    }
+
+    .tag-card {
+        min-height: 130px;
+        padding: 16px var(--space-sm) 18px;
+    }
+
+    .tag-card-name {
+        font-size: 14px;
     }
 }
 
