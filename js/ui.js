@@ -1591,10 +1591,26 @@ const UI = (() => {
                 $.sidebarFavCount.textContent = favs.length;
                 $.sidebarFavCount.style.display = favs.length > 0 ? '' : 'none';
             }
+
+            // 管理员 FAB
+            const isAdmin = (user.email === 'lexiaode@163.com' || user.email === 'quincy55@163.com');
+            if (isAdmin && !document.querySelector('.fab-note')) {
+                const fab = document.createElement('button');
+                fab.className = 'fab-note';
+                fab.innerHTML = '✏️';
+                fab.setAttribute('data-action', 'show-note-editor');
+                fab.title = '写新文章';
+                document.body.appendChild(fab);
+            } else if (!isAdmin) {
+                const existingFab = document.querySelector('.fab-note');
+                if (existingFab) existingFab.remove();
+            }
         } else {
             $.btnLogin.style.display = '';
             $.userMenuWrap.style.display = 'none';
             if ($.sidebarFavCount) $.sidebarFavCount.style.display = 'none';
+            const existingFab = document.querySelector('.fab-note');
+            if (existingFab) existingFab.remove();
         }
     }
 
