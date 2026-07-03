@@ -1913,6 +1913,8 @@ const UI = (() => {
         const song = Player.getCurrentSong();
         if (song && song.id) {
             fetchLyricsEmbedded(song.id);
+            // 加载短评
+            loadReviewsForSong(song.id);
         } else {
             $.lyricsPanelBody.innerHTML = `
                 <div class="lyrics-empty">
@@ -2033,6 +2035,203 @@ const UI = (() => {
                 body: JSON.stringify({ offset_ms: offsetMs }),
             });
         } catch (e) { /* 静默失败，本地已保存 */ }
+    }
+
+    // ========== 歌曲短评 (Reviews) ==========
+
+    let _reviewCache = {};
+    const REVIEW_CACHE_MAX = 50;
+
+    async function loadReviewsForSong(songId, showAll) {
+        if (!songId) return;
+
+        // 检查歌词面板是否打开
+        const panelBody = $.lyricsPanelBody;
+        if (!panelBody) return;
+
+        try {
+            const limit = showAll ? 50 : 3;
+            const res = await fetch(`/api/reviews?song_id=${songId}&limit=${limit}`);
+            if (!res.ok) throw new Error('加载短评失败');
+            const reviews = await res.json();
+
+            const song = _songCache[songId];
+            const songTitle = song ? song.title : '';
+
+            let html = '<div class="reviews-inline">';
+            html += `<div class="reviews-inline-title">💬 短评 (${reviews.length || 0})</div>`;
+
+            if (reviews && reviews.length > 0) {
+                const showCount = showAll ? reviews.length : Math.min(reviews.length, 3);
+                for (let i = 0; i < showCount; i++) {
+                    const r = reviews[i];
+                    const stars = r.rating ? '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating) : '';
+                    html += `<div class="review-inline-item">
+                        <div class="review-inline-header">
+                            ${stars ? `<span class="review-inline-stars">${stars}</span>` : ''}
+                            <span class="review-inline-author">${escapeHtml(r.username || '匿名')}</span>
+                            ${r.is_admin ? '<span class="review-inline-admin-badge">👑</span>' : ''}
+                        </div>
+                        <div class="review-inline-content">${escapeHtml(r.content)}</div>
+                    </div>`;
+                }
+                if (!showAll && reviews.length > 3) {
+                    html += `<div class="review-inline-more" data-action="load-more-reviews" data-song-id="${songId}">查看全部 ${reviews.length} 条短评 →</div>`;
+                }
+            }
+
+            // 输入区（登录用户可见）
+            if (typeof Auth !== 'undefined' && Auth.isLoggedIn && Auth.isLoggedIn()) {
+                html += `<div class="review-input-area">
+                    <textarea id="reviewContent" placeholder="写短评（最多 300 字）..." maxlength="300"></textarea>
+                    <div class="review-input-bottom">
+                        <div class="review-star-picker" id="reviewStarPicker">
+                            <span class="star" data-rating="1">★</span>
+                            <span class="star" data-rating="2">★</span>
+                            <span class="star" data-rating="3">★</span>
+                            <span class="star" data-rating="4">★</span>
+                            <span class="star" data-rating="5">★</span>
+                        </div>
+                        <button class="btn-review-submit" data-action="submit-review" data-song-id="${songId}">发表</button>
+                    </div>
+                </div>`;
+
+                // 星星选择
+                setTimeout(() => {
+                    const picker = document.getElementById('reviewStarPicker');
+                    if (picker) {
+                        picker.addEventListener('click', (e) => {
+                            const star = e.target.closest('.star');
+                            if (!star) return;
+                            const rating = parseInt(star.dataset.rating);
+                            picker.querySelectorAll('.star').forEach((el, idx) => {
+                                el.classList.toggle('active', idx < rating);
+                            });
+                            picker.dataset.selectedRating = rating;
+                        });
+                    }
+                }, 0);
+            } else {
+                html += `<div class="review-input-area" style="text-align:center;color:var(--text-tertiary);font-size:13px;padding:12px 0">
+                    <span data-action="show-auth" style="cursor:pointer;color:var(--accent)">登录</span> 后可以写短评
+                </div>`;
+            }
+
+            html += '</div>';
+
+            panelBody.innerHTML += html;
+        } catch (err) {
+            console.error('[reviews load]', err.message);
+        }
+    }
+
+    async function submitReview(songId) {
+        if (!Auth.isLoggedIn()) { showAuthModal(); return; }
+
+        const content = document.getElementById('reviewContent')?.value?.trim();
+        if (!content) { showToast('请输入短评内容'); return; }
+
+        const picker = document.getElementById('reviewStarPicker');
+        const rating = picker ? parseInt(picker.dataset.selectedRating) || null : null;
+
+        try {
+            const res = await fetchWithAuth('/api/reviews', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ song_id: songId, rating, content }),
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                showToast(err.error || '发表失败');
+                return;
+            }
+
+            showToast('短评已发表');
+            // 清除输入
+            const textarea = document.getElementById('reviewContent');
+            if (textarea) textarea.value = '';
+            if (picker) picker.dataset.selectedRating = '';
+
+            // 刷新短评区域
+            const panelBody = $.lyricsPanelBody;
+            if (panelBody) {
+                const existingReviews = panelBody.querySelector('.reviews-inline');
+                if (existingReviews) existingReviews.remove();
+            }
+            _feedCache = null; // 首页缓存也刷新
+            _feedCacheTime = 0;
+            loadReviewsForSong(songId, true);
+        } catch (err) {
+            showToast('网络错误');
+        }
+    }
+
+    async function deleteReview(reviewId) {
+        if (!Auth.isLoggedIn()) return;
+        if (!confirm('确定删除此短评？')) return;
+
+        try {
+            const res = await fetchWithAuth(`/api/reviews/${reviewId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('删除失败');
+            showToast('已删除');
+        } catch (err) {
+            showToast('删除失败');
+        }
+    }
+
+    // ========== 短评汇总页 (All Reviews) ==========
+
+    async function navigateToAllReviews() {
+        _currentView = 'all-reviews';
+        updateViewHeader(false, '');
+        $.sectionHeader.style.display = 'none';
+        setActiveSidebarNav('');
+
+        // 默认活跃高亮通过 nav-all-reviews 按钮手动设置
+        document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
+        const navBtn = document.querySelector('.sidebar-item[data-nav="all-reviews"]');
+        if (navBtn) navBtn.classList.add('active');
+
+        $.viewContainer.innerHTML = '<div class="skeleton-shimmer" style="height:80px;border-radius:12px;margin-bottom:12px"></div>'.repeat(5);
+
+        try {
+            const res = await fetch('/api/reviews/recent?limit=30');
+            if (!res.ok) throw new Error('加载失败');
+            const reviews = await res.json();
+
+            let html = '<div class="reviews-list-header">💬 全部短评</div>';
+
+            if (!reviews || reviews.length === 0) {
+                html += '<div class="empty-state"><span class="empty-icon">💬</span>还没有短评</div>';
+            } else {
+                for (const r of reviews) {
+                    const stars = r.rating ? '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating) : '';
+                    const cover = r.song && r.song.cover_url ? r.song.cover_url : '';
+                    const songTitle = r.song ? r.song.title : '';
+                    const singer = r.song ? r.song.singer : '';
+                    const time = formatRelativeTime(r.created_at);
+
+                    html += `<div class="review-card" data-action="play-review-song" data-song-id="${r.song_id}">
+                        ${cover ? `<img class="review-card-cover" src="${escapeHtml(cover)}" alt="" loading="lazy" decoding="async">` : ''}
+                        <div class="review-card-body">
+                            <div class="review-card-song-name">${escapeHtml(songTitle)} — ${escapeHtml(singer)}</div>
+                            ${stars ? `<div class="review-card-stars">${stars}</div>` : ''}
+                            <div class="review-card-content">${escapeHtml(r.content)}</div>
+                            <div class="review-card-meta">
+                                ${escapeHtml(r.username || '匿名')}
+                                ${r.is_admin ? '<span class="review-card-admin-badge">👑 管理员</span>' : ''}
+                                · ${time}
+                            </div>
+                        </div>
+                    </div>`;
+                }
+            }
+
+            $.viewContainer.innerHTML = html;
+        } catch (err) {
+            $.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">⚠️</span>加载失败<br><small>${escapeHtml(err.message)}</small></div>`;
+        }
     }
 
     // ========== 平板底部抽屉 ==========
