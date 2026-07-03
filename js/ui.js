@@ -1230,7 +1230,7 @@ const UI = (() => {
         if (comments && comments.length > 0) {
             html += '<div class="comments-list">';
             for (const c of comments) {
-                html += renderCommentItem(c, noteId);
+                html += renderCommentItem(c, noteId, note ? note.title : '');
             }
             html += '</div>';
         } else {
@@ -1253,7 +1253,7 @@ const UI = (() => {
         }
     }
 
-    function renderCommentItem(c, noteId) {
+    function renderCommentItem(c, noteId, noteTitle) {
         const username = escapeHtml(c.username || '用户');
         const initial = username.charAt(0).toUpperCase();
         const avatarHtml = c.avatar_url
@@ -1281,6 +1281,7 @@ const UI = (() => {
                         : ''}
                 </div>
                 <div class="comment-text">${renderedContent}</div>
+                <div class="comment-source">来自《<span data-action="feed-open-note" data-id="${noteId}">${escapeHtml(noteTitle || '未知文章')}</span>》</div>
             </div>
         </div>`;
     }
