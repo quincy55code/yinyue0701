@@ -678,8 +678,9 @@ const UI = (() => {
             // 1. Hero Banner
             html += renderHeroBanner(data.hero);
 
-            // 2. 最近更新
+            // 2. 最近更新（横滑 + 垂直列表）
             html += renderRecentNotes(data.recentNotes);
+            html += renderNoteVerticalList(data.recentNotes);
 
             // 3. 推荐歌曲横滑
             html += renderRecommendedSection(data.songs);
@@ -812,6 +813,40 @@ const UI = (() => {
                 <span class="home-section-link" data-action="nav-notes">查看全部 →</span>
             </div>
             <div class="notes-hscroll">${cardsHtml}</div>
+        </div>`;
+    }
+
+    function renderNoteVerticalList(notes) {
+        if (!notes || notes.length <= 5) return '';
+
+        const remaining = notes.slice(5);
+        let itemsHtml = '';
+        for (const note of remaining) {
+            const date = new Date(note.published_at);
+            const dateStr = date.getFullYear() + '年' + (date.getMonth() + 1) + '月' + date.getDate() + '日';
+            const summary = note.summary
+                ? escapeHtml(note.summary.slice(0, 120))
+                : escapeHtml((note.content || '').replace(/[#*`\n\r]/g, '').slice(0, 120));
+            const tags = note.tags || [];
+            const tagsHtml = tags.map(t => `<span class="note-card-tag">${escapeHtml(t)}</span>`).join('');
+
+            itemsHtml += `<div class="note-card" data-action="feed-open-note" data-id="${note.id}">
+                <div class="note-card-date">${dateStr}</div>
+                <div class="note-card-title">${escapeHtml(note.title || '')}</div>
+                <div class="note-card-summary">${summary}</div>
+                ${tagsHtml ? '<div class="note-card-tags">' + tagsHtml + '</div>' : ''}
+            </div>`;
+        }
+
+        return `<div class="home-section">
+            <div class="home-section-header">
+                <h3>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-4px;margin-right:6px"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                    更多文章
+                </h3>
+                <span class="home-section-link" data-action="nav-notes">查看全部 →</span>
+            </div>
+            ${itemsHtml}
         </div>`;
     }
 
