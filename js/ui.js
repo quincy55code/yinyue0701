@@ -203,6 +203,30 @@ const UI = (() => {
         return div.innerHTML;
     }
 
+    // ========== 工具函数：带认证的 fetch ==========
+    async function fetchWithAuth(url, options = {}) {
+        const headers = { ...options.headers };
+        if (typeof Auth !== 'undefined' && Auth.getAuthHeaders) {
+            Object.assign(headers, Auth.getAuthHeaders());
+        }
+        return fetch(url, { ...options, headers });
+    }
+
+    // ========== 工具函数：防抖 ==========
+    function debounce(fn, delay) {
+        let timer;
+        return function (...args) {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn.apply(this, args), delay);
+        };
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
     function h(html) {
         const t = document.createElement('template');
         t.innerHTML = html.trim();
@@ -802,6 +826,419 @@ const UI = (() => {
         _currentCollectionData = coll;
         updateViewHeader(true, coll.name);
         $.viewContainer.innerHTML = renderCollectionItemsGrid(coll.items, coll.name, coll.slug);
+    }
+
+    // ========== 博客文章列表 (Notes List) ==========
+
+    async function navigateToNotes() {
+        _currentView = 'notes';
+        updateViewHeader(false, '');
+        $.sectionHeader.style.display = 'none';
+        setActiveSidebarNav('notes');
+        _notesPage = 1;
+        _notesTotal = 0;
+
+        // 检查是否为管理员
+        if (Auth.isLoggedIn()) {
+            const user = Auth.getUser();
+            window._currentUserIsAdmin = (user.email === 'lexiaode@163.com' || user.email === 'quincy55@163.com');
+        } else {
+            window._currentUserIsAdmin = false;
+        }
+
+        if (window._currentUserIsAdmin) {
+            renderNotesListAdmin();
+        } else {
+            await renderNotesList();
+        }
+    }
+
+    async function renderNotesList() {
+        _notesLoading = true;
+        $.viewContainer.innerHTML = '<div class="skeleton-shimmer" style="height:80px;border-radius:12px;margin-bottom:12px"></div>'.repeat(4);
+
+        try {
+            const res = await fetch(`/api/notes?page=${_notesPage}&limit=10`);
+            if (!res.ok) throw new Error('加载失败');
+            const { data, total } = await res.json();
+            _notesTotal = total;
+            _notesLoading = false;
+
+            let html = '<div class="notes-list-header"><h2>✍️ 听歌笔记</h2></div>';
+
+            if (!data || data.length === 0) {
+                html += '<div class="empty-state"><span class="empty-icon">📝</span>还没有文章</div>';
+            } else {
+                for (const note of data) {
+                    const date = new Date(note.published_at);
+                    const dateStr = date.getFullYear() + '年' + (date.getMonth() + 1) + '月' + date.getDate() + '日';
+                    const summary = note.summary || (note.content ? note.content.replace(/[#*`\n\r]/g, '').slice(0, 120) : '');
+                    html += `<div class="note-card" data-action="feed-open-note" data-id="${note.id}">
+                        <div class="note-card-date">${dateStr}</div>
+                        <div class="note-card-title">${escapeHtml(note.title)}</div>
+                        <div class="note-card-summary">${escapeHtml(summary)}</div>
+                        ${note.tags && note.tags.length ? '<div class="note-card-tags">' + note.tags.map(t => `<span class="note-card-tag">${escapeHtml(t)}</span>`).join('') + '</div>' : ''}
+                    </div>`;
+                }
+            }
+
+            // 分页
+            if (_notesPage * 10 < _notesTotal) {
+                html += `<div class="load-more-wrap"><button class="btn-load-more" data-action="load-more-notes">加载更多</button></div>`;
+            }
+
+            $.viewContainer.innerHTML = html;
+        } catch (err) {
+            _notesLoading = false;
+            $.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">⚠️</span>加载失败<br><small>${escapeHtml(err.message)}</small></div>`;
+        }
+    }
+
+    async function renderNotesListAdmin() {
+        try {
+            const res = await fetchWithAuth('/api/notes/admin/list');
+            if (!res.ok) throw new Error('加载失败');
+            const notes = await res.json();
+
+            let html = '<div class="notes-list-header">';
+            html += '<h2>✍️ 听歌笔记（管理）</h2>';
+            html += '<button class="btn-write-note" data-action="show-note-editor">✏️ 写新文章</button>';
+            html += '</div>';
+
+            if (!notes || notes.length === 0) {
+                html += '<div class="empty-state"><span class="empty-icon">📝</span>还没有文章<br><small>点击"写新文章"开始创作</small></div>';
+            } else {
+                for (const note of notes) {
+                    const date = new Date(note.published_at || note.created_at);
+                    const dateStr = date.getFullYear() + '年' + (date.getMonth() + 1) + '月' + date.getDate() + '日';
+                    const statusBadge = note.published
+                        ? '<span style="font-size:11px;color:var(--accent);margin-left:8px">● 已发布</span>'
+                        : '<span style="font-size:11px;color:#F39C12;margin-left:8px">● 草稿</span>';
+                    const dailyBadge = note.daily_recommend
+                        ? '<span style="font-size:11px;color:#9B59B6;margin-left:8px">📌 每日推荐</span>'
+                        : '';
+                    const summary = note.summary || (note.content ? note.content.replace(/[#*`\n\r]/g, '').slice(0, 120) : '');
+                    html += `<div class="note-card" data-action="feed-open-note" data-id="${note.id}">
+                        <div class="note-card-date">${dateStr}${statusBadge}${dailyBadge}</div>
+                        <div class="note-card-title">${escapeHtml(note.title)}</div>
+                        <div class="note-card-summary">${escapeHtml(summary)}</div>
+                        ${note.tags && note.tags.length ? '<div class="note-card-tags">' + note.tags.map(t => `<span class="note-card-tag">${escapeHtml(t)}</span>`).join('') + '</div>' : ''}
+                    </div>`;
+                }
+            }
+
+            $.viewContainer.innerHTML = html;
+        } catch (err) {
+            $.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">⚠️</span>加载失败<br><small>${escapeHtml(err.message)}</small></div>`;
+        }
+    }
+
+    // ========== 博客文章详情 (Note Detail) ==========
+
+    async function navigateToNote(id) {
+        _currentView = 'note';
+        _currentNoteId = id;
+        updateViewHeader(true, '听歌笔记');
+        setActiveSidebarNav('notes');
+        $.sectionHeader.style.display = 'none';
+
+        $.viewContainer.innerHTML = '<div class="skeleton-shimmer" style="height:300px;border-radius:12px"></div>';
+
+        try {
+            const res = await fetch(`/api/notes/${id}`);
+            if (!res.ok) throw new Error('文章不存在');
+            const note = await res.json();
+
+            const date = new Date(note.published_at || note.created_at);
+            const dateStr = date.getFullYear() + '年' + (date.getMonth() + 1) + '月' + date.getDate() + '日';
+
+            let html = '<div class="note-detail">';
+            // 标签
+            if (note.tags && note.tags.length > 0) {
+                html += '<div class="note-detail-tags">';
+                note.tags.forEach(t => {
+                    html += `<span class="note-detail-tag">${escapeHtml(t)}</span>`;
+                });
+                html += '</div>';
+            }
+            html += `<h1>${escapeHtml(note.title)}</h1>`;
+            html += `<div class="note-detail-meta">
+                <span>📅 ${dateStr}</span>
+                <span>☕ ${Math.ceil((note.content || '').length / 500)} 分钟阅读</span>
+            </div>`;
+            html += '<hr class="note-detail-divider">';
+            html += renderMarkdown(note.content);
+            html += '</div>';
+
+            // 管理员操作按钮
+            if (window._currentUserIsAdmin) {
+                html += `<div class="note-detail-actions">
+                    <button class="note-detail-btn" data-action="edit-note" data-note-id="${note.id}">✏️ 编辑</button>
+                    <button class="note-detail-btn note-detail-btn--danger" data-action="delete-note" data-note-id="${note.id}">🗑️ 删除</button>
+                </div>`;
+            }
+
+            $.viewContainer.innerHTML = html;
+        } catch (err) {
+            $.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">⚠️</span>${escapeHtml(err.message)}</div>`;
+        }
+    }
+
+    // ========== 博客编辑器 (Note Editor) ==========
+
+    async function showNoteEditor(existingNoteId) {
+        if (!Auth.isLoggedIn()) { showAuthModal(); return; }
+
+        let noteData = null;
+        if (existingNoteId) {
+            try {
+                const res = await fetch(`/api/notes/${existingNoteId}`);
+                if (res.ok) noteData = await res.json();
+            } catch { /* 忽略 */ }
+        }
+
+        const isEditing = !!noteData;
+        const title = isEditing ? noteData.title : '';
+        const content = isEditing ? noteData.content : '';
+        const tags = isEditing ? (noteData.tags || []) : [];
+        const summary = isEditing ? (noteData.summary || '') : '';
+        const published = isEditing ? noteData.published : false;
+        const dailyRec = isEditing ? noteData.daily_recommend : false;
+        const selectedSongId = isEditing ? (noteData.song_id || null) : null;
+
+        // 构建编辑器 HTML
+        let tagsHtml = tags.map(t => `<span class="tag-chip">${escapeHtml(t)}<span class="remove-tag" data-action="remove-tag">×</span></span>`).join('');
+        let songSelectorHtml = '';
+        if (selectedSongId) {
+            const song = _songCache[selectedSongId];
+            songSelectorHtml = song
+                ? `<div class="song-selector-result">🎵 ${escapeHtml(song.title)} — ${escapeHtml(song.singer || '')} <span class="remove" data-action="clear-song">✕</span></div>`
+                : `<div class="song-selector-result">歌曲 #${selectedSongId} <span class="remove" data-action="clear-song">✕</span></div>`;
+        }
+
+        const bodyHTML = `<div class="note-editor-field">
+            <label>标题</label>
+            <input type="text" id="noteTitle" value="${escapeHtml(title)}" placeholder="文章标题...">
+        </div>
+        <div class="note-editor-field">
+            <label>摘要（可选，留空则自动截取）</label>
+            <input type="text" id="noteSummary" value="${escapeHtml(summary)}" placeholder="简短描述...">
+        </div>
+        <div class="note-editor-field">
+            <label>标签（回车添加）</label>
+            <div class="tag-input-wrap" id="tagInputWrap">
+                ${tagsHtml}
+                <input type="text" class="tag-input-inline" id="tagInput" placeholder="输入标签后回车...">
+            </div>
+        </div>
+        <div class="note-editor-field">
+            <label>正文（Markdown 语法）</label>
+            <textarea id="noteContent">${escapeHtml(content)}</textarea>
+        </div>
+        <div class="note-editor-field">
+            <label>关联歌曲（输入歌曲名搜索）</label>
+            <div class="song-selector">
+                <input type="text" id="songSearch" placeholder="搜索歌曲..." autocomplete="off">
+                <div id="songSelectorResult">${songSelectorHtml}</div>
+            </div>
+        </div>
+        <div class="toggle-row">
+            <span class="toggle-label">设为每日推荐</span>
+            <label class="toggle-switch">
+                <input type="checkbox" id="dailyRecToggle" ${dailyRec ? 'checked' : ''}>
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+        <div class="toggle-row">
+            <span class="toggle-label">发布</span>
+            <label class="toggle-switch">
+                <input type="checkbox" id="publishedToggle" ${published ? 'checked' : ''}>
+                <span class="toggle-slider"></span>
+            </label>
+        </div>`;
+
+        const actionsHTML = `<div class="note-editor-actions">
+            <button class="btn-note-preview" id="btnPreview">👁️ 预览</button>
+            <button class="btn-note-save" id="btnSaveDraft">💾 保存草稿</button>
+            <button class="btn-note-publish" id="btnPublish">📢 发布</button>
+        </div>`;
+
+        showModal(isEditing ? '✏️ 编辑文章' : '✏️ 写新文章', bodyHTML, actionsHTML);
+
+        // 编辑状态存储
+        const editorState = {
+            tags: [...tags],
+            selectedSongId: selectedSongId,
+            isEditing: isEditing,
+            noteId: isEditing ? noteData.id : null,
+        };
+
+        // 标签输入事件
+        const tagInput = document.getElementById('tagInput');
+        const tagWrap = document.getElementById('tagInputWrap');
+        if (tagInput) {
+            tagInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const val = tagInput.value.trim();
+                    if (val && !editorState.tags.includes(val)) {
+                        editorState.tags.push(val);
+                        refreshTagChips(tagWrap, editorState.tags);
+                    }
+                    tagInput.value = '';
+                }
+            });
+        }
+
+        // 全局事件：移除标签、清空歌曲
+        document.body.addEventListener('click', function editorTagHandler(e) {
+            if (e.target.dataset.action === 'remove-tag') {
+                const tagText = e.target.parentElement.textContent.replace('×', '').trim();
+                editorState.tags = editorState.tags.filter(t => t !== tagText);
+                refreshTagChips(tagWrap, editorState.tags);
+            }
+            if (e.target.dataset.action === 'clear-song') {
+                editorState.selectedSongId = null;
+                document.getElementById('songSelectorResult').innerHTML = '';
+            }
+        });
+
+        // 歌曲搜索
+        const songSearch = document.getElementById('songSearch');
+        if (songSearch) {
+            songSearch.addEventListener('input', debounce(async () => {
+                const q = songSearch.value.trim();
+                if (q.length < 2) return;
+                try {
+                    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+                    if (!res.ok) return;
+                    const { results } = await res.json();
+                    if (results && results.length > 0) {
+                        const s = results[0];
+                        editorState.selectedSongId = s.id;
+                        mergeToCache(results);
+                        document.getElementById('songSelectorResult').innerHTML =
+                            `<div class="song-selector-result">🎵 ${escapeHtml(s.title)} — ${escapeHtml(s.singer || '')} <span class="remove" data-action="clear-song">✕</span></div>`;
+                    }
+                } catch { /* 忽略 */ }
+            }, 400));
+        }
+
+        // 预览按钮
+        const btnPreview = document.getElementById('btnPreview');
+        if (btnPreview) {
+            btnPreview.addEventListener('click', () => {
+                const md = document.getElementById('noteContent').value;
+                const previewHTML = renderMarkdown(md);
+                const previewWindow = window.open('', '_blank', 'width=700,height=600');
+                previewWindow.document.write(`
+                    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>文章预览</title>
+                    <style>
+                        body { max-width:680px; margin:24px auto; padding:0 20px; background:#0B0E0C; color:#EDF0EE; font-family:Inter,sans-serif; line-height:1.8; }
+                        h1 { font-size:26px; } h2 { font-size:20px; margin-top:24px; }
+                        blockquote { border-left:3px solid #4DB88D; padding-left:16px; color:#9BA89F; }
+                        code { background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:4px; }
+                        pre { background:rgba(0,0,0,0.2); padding:16px; border-radius:8px; overflow-x:auto; }
+                        .song-embed { display:flex; align-items:center; gap:12px; padding:12px; background:#1C2320; border-radius:8px; margin:16px 0; }
+                        img { max-width:100%; border-radius:8px; }
+                        table { width:100%; border-collapse:collapse; }
+                        th,td { border:1px solid #2C3330; padding:8px 12px; text-align:left; }
+                    </style></head><body>${previewHTML}</body></html>
+                `);
+            });
+        }
+
+        // 保存草稿
+        const btnSaveDraft = document.getElementById('btnSaveDraft');
+        if (btnSaveDraft) {
+            btnSaveDraft.addEventListener('click', () => saveNote(editorState, false));
+        }
+
+        // 发布
+        const btnPublish = document.getElementById('btnPublish');
+        if (btnPublish) {
+            btnPublish.addEventListener('click', () => saveNote(editorState, true));
+        }
+    }
+
+    function refreshTagChips(wrap, tags) {
+        const input = wrap.querySelector('.tag-input-inline');
+        wrap.innerHTML = tags.map(t => `<span class="tag-chip">${escapeHtml(t)}<span class="remove-tag" data-action="remove-tag">×</span></span>`).join('');
+        if (input) wrap.appendChild(input);
+    }
+
+    async function saveNote(state, publish) {
+        const title = document.getElementById('noteTitle')?.value?.trim();
+        const content = document.getElementById('noteContent')?.value?.trim();
+        const summary = document.getElementById('noteSummary')?.value?.trim();
+        const dailyRec = document.getElementById('dailyRecToggle')?.checked || false;
+
+        if (!title) { showToast('请输入标题'); return; }
+        if (!content) { showToast('请输入正文'); return; }
+
+        const body = {
+            title,
+            content,
+            summary: summary || null,
+            tags: state.tags,
+            daily_recommend: dailyRec,
+            song_id: state.selectedSongId || null,
+            published: publish,
+        };
+
+        try {
+            const url = state.isEditing ? `/api/notes/${state.noteId}` : '/api/notes';
+            const method = state.isEditing ? 'PUT' : 'POST';
+            const res = await fetchWithAuth(url, {
+                method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                showToast(err.error || '保存失败');
+                return;
+            }
+
+            hideModal();
+            showToast(publish ? '文章已发布' : '草稿已保存');
+
+            // 刷新首页缓存
+            _feedCache = null;
+            _feedCacheTime = 0;
+
+            // 刷新列表
+            if (state.isEditing && _currentView === 'note') {
+                navigateToNote(state.noteId);
+            } else {
+                renderNotesListAdmin();
+            }
+        } catch (err) {
+            showToast('网络错误');
+        }
+    }
+
+    async function deleteNote(id) {
+        if (!confirm('确定要删除这篇文章吗？此操作不可恢复。')) return;
+
+        try {
+            const res = await fetchWithAuth(`/api/notes/${id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('删除失败');
+
+            showToast('已删除');
+            _feedCache = null;
+            _feedCacheTime = 0;
+
+            if (_currentView === 'note') {
+                _currentView = 'notes';
+                renderNotesListAdmin();
+            } else {
+                navigateHome();
+            }
+        } catch (err) {
+            showToast('删除失败');
+        }
     }
 
     async function navigateToCollectionSongs(bvid, title) {
@@ -1812,6 +2249,34 @@ const UI = (() => {
             if (action === 'delete-note') {
                 const noteId = parseInt(btn.dataset.noteId);
                 if (!isNaN(noteId)) deleteNote(noteId);
+                return;
+            }
+            if (action === 'load-more-notes') {
+                _notesPage++;
+                await renderNotesList();
+                return;
+            }
+            // --- 短评事件 ---
+            if (action === 'load-more-reviews') {
+                const songId = parseInt(btn.dataset.songId);
+                if (!isNaN(songId)) loadReviewsForSong(songId, true);
+                return;
+            }
+            if (action === 'submit-review') {
+                const songId = parseInt(btn.dataset.songId);
+                if (!isNaN(songId)) submitReview(songId);
+                return;
+            }
+            if (action === 'delete-review') {
+                const reviewId = parseInt(btn.dataset.reviewId);
+                if (!isNaN(reviewId)) deleteReview(reviewId);
+                return;
+            }
+            if (action === 'play-review-song') {
+                const songId = parseInt(btn.dataset.songId);
+                if (songId && _songCache[songId]) {
+                    Player.playSongById(songId);
+                }
                 return;
             }
             if (action === 'nav-back') {
