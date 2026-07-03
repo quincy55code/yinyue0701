@@ -113,6 +113,26 @@ curl -s -X PATCH "https://orphftlwdwuvoscizndx.supabase.co/rest/v1/songs?id=eq.1
 
 No build step, no linter, no test suite. Dependencies are already installed (`node_modules/`).
 
+**查询 `comments` 表（验证评论功能）:**
+```sql
+SELECT c.*, u.username FROM comments c
+JOIN users u ON u.id = c.user_id ORDER BY c.created_at DESC LIMIT 10;
+```
+
+**2026-07-03 新增功能:**
+- `comments` 表（DDL: `sql/comments.sql`）— `id, note_id, user_id, content, created_at`。博客文章评论系统。
+- `GET /api/notes/:id/comments` — 获取文章评论（含用户 username/avatar_url），无需登录
+- `POST /api/notes/:id/comments` — 发表评论（需 authMiddleware），body: `{ content }`
+- `DELETE /api/comments/:id` — 删除自己的评论（需 authMiddleware，验证 ownership）
+- `GET /api/home` — 首页聚合接口（Hero + 最近更新 + 推荐歌曲 + 最新评论），一次请求返回所有板块数据。
+- **首页重设计**: Hero Banner (日推封面+渐变遮罩), 最近更新 Bento 横滑, 推荐歌曲横滑覆盖层, 最新评论动态, SVG 替换所有 emoji, 入场动画。
+- **评论区**: 在文章详情底部渲染（`appendComments()`），登录后发表，`[song:ID]` Markdown 嵌入仍可渲染为歌曲卡片但不显示提示。
+- `playSongById(songId)` — 修复原代码中调用 `Player.playSongById()` 不存在的问题，在 ui.js 中封装。**注意：现在是 async 函数**（2026-07-03 改造），缓存未命中时会自动 fetch `/api/songs?limit=300` 填充缓存后再播放。
+- **首页笔记横竖混合布局**（2026-07-03 改造）：`renderRecentNotes()` 只显示前 5 条横滑卡片；下方新增 `renderNoteVerticalList()` 显示剩余笔记的垂直列表（`.note-card` 复用现有样式）。
+- **笔记内歌曲 fallback 修复**（2026-07-03 改造）：`navigateToNote()` 中未缓存的歌曲嵌入也带 `data-action="play-embed-song"` 和 `data-song-id`，点击后由异步 `playSongById()` 加载。
+- **评论区去掉 `[song:ID]` 提示**（2026-07-03 改造）：不再显示 `[song:ID]` 输入语法提示，但 `renderMarkdown()` 仍保留解析能力（向后兼容）。
+- **评论显示笔记来源**（2026-07-03 改造）：`renderCommentItem(c, noteId, noteTitle)` 在每条评论底部追加 `来自《笔记标题》`，可点击跳转。
+
 ## Architecture
 
 **Stack:** Node.js Express backend (port 8765) + vanilla HTML/CSS/JS frontend (no framework). Database is Supabase PostgreSQL (`orphftlwdwuvoscizndx.supabase.co`). The Python `app.py` is a legacy backup — the active backend is `server.js`.
@@ -141,6 +161,12 @@ No build step, no linter, no test suite. Dependencies are already installed (`no
 - **加入歌单 Hover 弹出菜单** — `showAddToPlaylistPopup()` 代替 `showAddToPlaylistModal()`，点击 "+" 后原地弹出下拉菜单（`position: fixed` 毛玻璃），点击歌单名直接添加，无弹窗动画延迟。鼠标移出 300ms 自动关闭。
 
 **Static assets:** `express.static(__dirname)` serves the entire project root. Tag card background images are in `public/images/tags/` (downloaded by `download_tag_bg.js` from Unsplash). The directory must exist before running that script.
+
+**comments 表（DDL: `sql/comments.sql`）:** `id, note_id, user_id, content, created_at`。博客文章评论系统。
+
+**首页聚合 API `GET /api/home`:** Hero（最新每日推荐+歌曲信息）+ 最近更新（8 篇笔记）+ 推荐歌曲（12 首）+ 最新评论（10 条，含 note 标题 + 歌曲嵌入）。
+
+**`playSongById(songId)` 在 ui.js 中定义，非 Player 的方法。** 功能：从 `_songCache` 查找歌曲，封装为单曲列表调用 `Player.playAll([song], 0)`。ui.js 中共有 4 处调用点（feed-play-song, feed-play-recommended, play-embed-song, home-hero-play）。
 
 **Data flow:**
 ```
@@ -196,6 +222,12 @@ Favorites & Playlists endpoints — all behind `authMiddleware` (JWT token valid
 - `POST /api/playlists/:id/songs` — add song to playlist (auto sort_order, upsert)
 - `DELETE /api/playlists/:id/songs/:songId` — remove song from playlist
 
+**Homepage & Comments (2026-07-03 新增):**
+- `GET /api/home` — 首页聚合接口，并行获取 Hero（最新 daily_recommend）+ 最近更新笔记 + 推荐歌曲 + 最新评论
+- `GET /api/notes/:id/comments` — 获取文章评论列表（含用户 username/avatar_url），无需登录
+- `POST /api/notes/:id/comments` — 发表评论（authMiddleware），body: `{ content }`
+- `DELETE /api/comments/:id` — 删除自己的评论（authMiddleware + ownership 验证）
+
 Credentials load from `.env` via a manual parser (no `dotenv` dependency). `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET` (from Supabase Dashboard → Settings → API → JWT Settings), and `EMAIL_SMTP_PASS` (163 mailbox SMTP authorization code) are all required at startup. Template at `.env.example`.
 
 **Critical: Range/CORS is handled inline without extra dependencies.** The server forwards `req.headers.range` to B站 CDN so seeking works. It also forwards `Content-Length` from upstream — without it, browsers can't map time→byte offsets and `audio.currentTime = X` silently fails.
@@ -215,6 +247,8 @@ Five JS files loaded in order in `index.html`: `js/auth.js` → `js/playlist.js`
 - `footer.player-bar` — 72px frosted-glass bar: cover thumbnail (48px) | meta | controls + progress | volume popup
 - `.now-playing-overlay` — full-screen immersive view (triggered by clicking the player bar cover), 280px cover art with blurred backdrop, large controls, fav/add-to-playlist actions
 - `.lyrics-panel` — **embedded lyrics panel** (`position: fixed`, `z-index: 25`, direct child of `.app-layout`). Slides in from right (380px, `translateX(105%)` → `translateX(0)` via `.open` class). Click 🎤 to toggle, ✕ to close, ↗ to pop out standalone `lyrics.html` window. Syncs via `Player.on()` directly (not BroadcastChannel). Must stay at `.app-layout` root — if moved inside `.content-wrapper`, it gets covered by content area.
+- **Homepage sections** — 新首页布局: `.home-hero` (Hero Banner 300px, 模糊背景+渐变遮罩+封面), `.notes-hscroll` (最近更新 Bento 横滑卡片), `.recommended-scroll` (推荐歌曲横滑+播放覆盖层), `.comment-feed-list` (最新评论动态)
+- **Comments** — `.comments-section` (评论区容器), `.comment-item` (头像+内容+删除按钮), `.comment-form` (textarea+提交按钮), `.comment-login-hint` (登录提示)
 
 `lyrics.html` is a standalone page that can be opened as a popup window (via ↗ button in the embedded lyrics panel, or via `openLyricsWindow()`). It loads its own `js/lyrics.js` (also IIFE → `Lyrics` singleton) and `css/lyrics.css`. It communicates with the main window via `BroadcastChannel('music_player_lyrics')`. The embedded lyrics panel in the main page is an entirely separate implementation in `ui.js` — the two do not share code.
 
@@ -222,8 +256,8 @@ Five JS files loaded in order in `index.html`: `js/auth.js` → `js/playlist.js`
 |--------|---------------|
 | `js/auth.js` | JWT-based auth + email verification code + password login. Manages session (`localStorage` keys: `music_player_session`, `music_player_user`). Methods: `sendCode(email)`, `verifyCode(email, code)`, `loginWithPassword(email, password)`, `checkEmail(email)` → `{ exists }`, `register(email, code, password)` → one-step signup, `resetPassword(email, code, newPassword)` → forgot-password flow, `setPassword(password)`, `updateProfile({ username })`, `uploadAvatar(file)` (reads as base64). Validates token expiry on init via `GET /api/auth/me`. Observer pattern via `onChange()`. Provides `getAuthHeaders()` used by PlaylistStore for all API calls. |
 | `js/playlist.js` | API-driven favorites + playlist management with **optimistic local cache**. `getFavorites()`/`getPlaylists()` are **synchronous** (return `_favoritesCache`/`_playlistsCache`). Mutation methods update cache instantly + `notify()` → UI refreshes immediately, then send the network request in background. On failure, they rollback cache by re-fetching from server. Search history still uses localStorage (`music_player_search_history`). |
-| `js/player.js` | `<audio>` element lifecycle, play/pause/seek/mode logic. `setVolume(v)` / `getVolume()` for volume control (audio created via `new Audio()`, not in DOM). Emits events: `timeupdate`, `duration`, `playState`, `modeChange`, `ended`, `loading`, `error`. `seek()` adds `startTime` offset for segmented songs. `load()` sets `audio.src = /api/stream/:id`. Fallback seek: fast-forwards at 8x muted if Range not supported by CDN. **Also pushes `time-update` and `song-change` messages to the `music_player_lyrics` BroadcastChannel** for lyrics sync. |
-| `js/ui.js` | All DOM rendering and event delegation. **Sidebar-based navigation**: sidebar nav buttons (`data-nav`) switch between home (cover grid of songs), tags (tag grid), collections, favorites, and playlists. `_currentView` tracks `'home'` → `'tags'` → `'tag'` → `'star'` → `'collection'` → `'collection-items'` → `'collection-songs'` → `'favorites'` → `'playlists'` → `'search'`. **Two rendering modes**: `renderCoverGrid()` for tag/song views (large cover cards with hover play overlay, `cover_url` images with gradient fallback), `renderSongList()` for search results (compact list rows with thumbnail). **Auth modal**: Email-first 3-state flow — `email` (enter email → "继续" → checks `/api/auth/check-email`) → `password` (existing account: password login with "用验证码登录" + "忘记密码？" links) / `register` (new account: code + password → one-step signup). Also a `resetPassword` state for forgot-password (code + new password → reset → back to password). No more `showSetPasswordModal` — password setup is baked into the register flow. **User area**: circular avatar (photo or username initial), dropdown menu (修改用户名, 更换头像, 退出登录). **Feedback**: modal with textarea → `POST /api/feedback`. **Mode/volume icons**: inline SVGs replacing emoji; volume icon changes with level (high/medium/low/mute). **Collections**: `navigateToCollection()` fetches `/api/collections`, caches tree in `_collectionTree`, renders 12 category cards with hardcoded `COLLECTION_ICONS` and gradient backgrounds. `navigateToCollectionItems(collId)` renders sub-tags — items WITH `bvid` are clickable (regardless of `song_count`), items with `bvid=null` (主题歌单 placeholders) get `tag-card--empty` class and are non-clickable. Sub-tag cards use gradient backgrounds (no external images). `navigateToCollectionSongs(bvid, title)` calls `/api/songs?bvid=...&limit=300`. **Immersive Now Playing**: `openNowPlaying()` / `closeNowPlaying()` manage a full-screen overlay with 280px cover art, blurred backdrop, large controls, and fav/playlist actions. **Player bar** includes a 48px cover thumbnail (clickable → opens immersive view), song title/singer, center controls + progress, and right-side volume popup. **Embedded lyrics**: `parseLRCEmbedded()` / `fetchLyricsEmbedded()` / `renderLyricsEmbedded()` / `syncLyricsEmbedded()` / `toggleLyricsPanel()` — LRC parsing + binary-search sync, rendered in `.lyrics-panel` (fixed overlay). Opened via 🎤 button, synced directly via `Player.on()` events. **Search**: Debounced (300ms) with history dropdown, silent `/api/search-log` on empty results. Global `[data-action]` event delegation. `sidebarTags` rendered from top 6 tags with colored dots. Tablet: FAB-triggered bottom drawer for favorites/playlists. Skeleton shimmer animation on load. `_songCache` merges from all API responses. |
+| `js/player.js` | `<audio>` element lifecycle, play/pause/seek/mode logic. `setVolume(v)` / `getVolume()` for volume control (audio created via `new Audio()`, not in DOM). Emits events: `timeupdate`, `duration`, `playState`, `modeChange`, `ended`, `loading`, `error`. `seek()` adds `startTime` offset for segmented songs. `load()` sets `audio.src = /api/stream/:id`. Fallback seek: fast-forwards at 8x muted if Range not supported by CDN. **Also pushes `time-update` and `song-change` messages to the `music_player_lyrics` BroadcastChannel** for lyrics sync. **`playSongById(songId)` 不存在于 Player 中** — UI 层使用 `ui.js` 中的 `playSongById()` 包装函数。 |
+| `js/ui.js` | All DOM rendering and event delegation. **Homepage 重设计(2026-07-03)**: `renderNewHome()` 替代原 `renderHomeFeed()`，布局：Hero Banner (`renderHeroBanner`) + 最近更新横滑 (`renderRecentNotes`, Bento 卡片) + 推荐歌曲 (`renderRecommendedSection`, 播放覆盖层) + 最新评论 (`renderRecentComments`)。All sections 有 staggered 入场动画 (`heroFadeIn`, `sectionFadeUp`)。**评论区(2026-07-03)**: `appendComments(noteId)` 在文章详情底部追加评论区，`renderComments(comments, noteId)` 渲染评论列表+表单，`renderCommentItem(c)` 渲染单条评论。评论内容通过 `renderMarkdown()` 支持 `[song:123]` 嵌入。发表评论事件 `submit-comment`，删除评论事件 `delete-comment`。**Sidebar-based navigation**: sidebar nav buttons (`data-nav`) switch between home, tags, collections, favorites, and playlists.
 | `js/lyrics.js` | Runs in the `lyrics.html` standalone popup only (NOT the embedded panel). Parses LRC text (`parseLRC()` → `[{time, text}]`), syncs current line via **binary search** (`syncTime()`), renders in two modes: **vertical** (≈10 lines, scrolls) and **horizontal** (2 lines centered, side-by-side prev/next). Title bar is draggable. Listens on BroadcastChannel for `time-update`, `song-change`, `lyrics-open`. Posts `{ type: 'lyrics-closed' }` and `{ type: 'mode-change' }` (objects, not strings) back to main window. The embedded panel in `ui.js` has its own independent LRC parser (`parseLRCEmbedded()`) and sync logic — the two systems share no code. |
 
 **Event flow for mutations (critical):**
@@ -253,7 +287,8 @@ The `[data-action]` event delegation handles all navigation: sidebar items (`nav
 
 ### CSS
 
-- `css/style.css` — Spotify × Apple Music fusion dark theme. **Design tokens** in `:root`: dark green background hierarchy (`--bg-root: #0B0E0C` → `--bg-elevated: #1C2320`), warm green accent (`--accent: #4DB88D`), frosted glass via `backdrop-filter: blur()` on sidebar and player bar. **Layout**: CSS Grid `.app-layout` (sidebar | content-wrapper) + `content-wrapper` flex column (top-bar | content-area). `.content-wrapper` MUST have `overflow: hidden` (not visible). **Components**: `.cover-card` (140px cover image + title/singer + hover play overlay + corner fav button), `.song-list-item` (44px thumbnail row for search), `.tag-card` (emoji icon + name + count), `.sidebar` (240px frosted, 3px green active indicator), `.player-bar` (72px frosted, 48px cover, center controls+progress, right volume popup), `.now-playing-overlay` (full-screen, 280px cover, blurred backdrop), `.lyrics-panel` (`position: fixed; z-index: 25; right: 0; width: 380px;` — slide-in via `translateX(105%)` → `translateX(0)` on `.open`). **Responsive breakpoints**: ≥1024px (full sidebar), 768-1023px (hide sidebar, show hamburger + FAB + bottom drawer, lyrics panel full-width), <768px (compact player bar, lyrics panel full-width, progress bar still visible). **Animations**: staggered card entry (`cardEnter` keyframe), skeleton shimmer, `glowPulse` for playing card, `heartPop` for fav toggle, `npoContentIn` for immersive view entrance. `prefers-reduced-motion` respected.
+- `css/style.css` — Spotify × Apple Music fusion dark theme. **Design tokens** in `:root`: dark green background hierarchy (`--bg-root: #0B0E0C` → `--bg-elevated: #1C2320`), warm green accent (`--accent: #4DB88D`), frosted glass via `backdrop-filter: blur()` on sidebar and player bar. **Layout**: CSS Grid `.app-layout` (sidebar | content-wrapper) + `content-wrapper` flex column (top-bar | content-area). `.content-wrapper` MUST have `overflow: hidden` (not visible). **Components**: `.cover-card` (140px cover image + title/singer + hover play overlay + corner fav button), `.song-list-item` (44px thumbnail row for search), `.tag-card` (emoji icon + name + count), `.sidebar` (240px frosted, 3px green active indicator), `.player-bar` (72px frosted, 48px cover, center controls+progress, right volume popup), `.now-playing-overlay` (full-screen, 280px cover, blurred backdrop), `.lyrics-panel` (`position: fixed; z-index: 25; right: 0; width: 380px;` — slide-in via `translateX(105%)` → `translateX(0)` on `.open`). **Homepage(2026-07-03)**: `.home-hero` (300px, 模糊背景+渐变遮罩+封面+入场动画), `.home-hero--default` (无日推时的渐变背景), `.home-section` (板块容器+staggered 动画), `.notes-hscroll` (最近更新横滑 240px Bento 卡片), `.note-hscroll-inner` (140px 卡片+圆角边框+阴影), `.recommended-scroll` (推荐歌曲横滑), `.recommended-item-cover-wrap` (130px 方封面+播放 overlay), `.comment-feed-list` (最新评论动态), `.comment-feed-item` (评论卡片+border). **Comments(2026-07-03)**: `.comments-section`, `.comment-form`, `.comment-item` (34px 圆形渐变头像), `.comment-text .song-embed` (评论中的歌曲嵌入). **Animations**: `heroFadeIn`, `sectionFadeUp`, staggered card entry (`cardEnter` keyframe), skeleton shimmer, `glowPulse` for playing card, `heartPop` for fav toggle, `npoContentIn` for immersive view entrance. `prefers-reduced-motion` respected.
+- `css/lyrics.css` — Lyrics popup window styles. Shares the same CSS variable naming as the main app (dark green theme). Vertical mode: line-by-line scroll with active line in accent color; horizontal mode: two large lines centered side-by-side. Frosted glass container background.
 - `css/lyrics.css` — Lyrics popup window styles. Shares the same CSS variable naming as the main app (dark green theme). Vertical mode: line-by-line scroll with active line in accent color; horizontal mode: two large lines centered side-by-side. Frosted glass container background.
 
 ### Database (`sql/`)
