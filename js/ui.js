@@ -1218,11 +1218,10 @@ const UI = (() => {
                     发表
                 </button>
             </div>`;
-            html += `<div class="comment-hint">💡 输入 <code>[song:歌曲ID]</code> 可嵌入歌曲卡片</div>`;
         } else {
             html += `<div class="comment-login-hint">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px;margin-right:4px"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                <span data-action="show-auth">登录</span>后可发表评论（支持 <code>[song:ID]</code> 嵌入歌曲）
+                <span data-action="show-auth">登录</span>后可发表评论
             </div>`;
         }
 
@@ -1239,18 +1238,6 @@ const UI = (() => {
 
         html += '</div>';
         container.innerHTML = html;
-
-        // 焦点到评论区域
-        const commentInput = document.getElementById('commentInput');
-        if (commentInput) {
-            // 输入提示：显示支持[song:ID]语法
-            commentInput.addEventListener('focus', () => {
-                if (!commentInput.dataset.helped) {
-                    showToast('💡 输入 [song:歌曲ID] 可嵌入歌曲卡片');
-                    commentInput.dataset.helped = 'true';
-                }
-            });
-        }
     }
 
     function renderCommentItem(c, noteId, noteTitle) {
