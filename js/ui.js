@@ -620,8 +620,6 @@ const UI = (() => {
                 return;
             }
             navigateHome();
-        } else if (_currentView === 'all-reviews') {
-            navigateHome();
         }
     }
 
@@ -630,164 +628,277 @@ const UI = (() => {
         _currentCollectionData = null;
         updateViewHeader(false, '');
         $.sectionHeader.style.display = 'none';
-        renderHomeFeed();
+        renderNewHome();
         setActiveSidebarNav('home');
     }
 
-    // ========== 动态流 (Feed) ==========
+    // ========== 播放单个歌曲（修复 playSongById 不存在的问题） ==========
 
-    async function fetchFeed() {
-        const now = Date.now();
-        if (_feedCache && (now - _feedCacheTime) < FEED_CACHE_TTL) {
-            return _feedCache;
+    /** 播放单首歌曲（通过 id 从缓存查找并封装为单曲列表） */
+    async function playSongById(songId) {
+        const song = _songCache[songId];
+        if (song) {
+            Player.playAll([song], 0);
+            return;
         }
+        // 缓存未命中，拉一批歌曲填充缓存
         try {
-            const res = await fetch('/api/feed?limit=30');
-            if (!res.ok) throw new Error('Feed API error');
-            const data = await res.json();
-            _feedCache = data || [];
-            _feedCacheTime = now;
-            return _feedCache;
+            const res = await fetch('/api/songs?limit=300');
+            if (res.ok) {
+                const songs = await res.json();
+                const data = Array.isArray(songs) ? songs : (songs.data || []);
+                mergeToCache(data);
+                const found = _songCache[songId];
+                if (found) {
+                    Player.playAll([found], 0);
+                    return;
+                }
+            }
+            showToast('⚠️ 无法找到这首歌');
         } catch (err) {
-            console.error('[feed]', err.message);
-            return [];
+            showToast('⚠️ 加载歌曲失败');
         }
     }
 
-    function renderFeedCard(item) {
-        const type = item.type;
-        const typeLabels = {
-            note: '✍️ 写了博客',
-            daily_recommend: '📌 每日推荐',
-            review: '💬 写了短评',
-            favorite: '⭐ 收藏了歌曲',
-        };
-        const typeBadge = typeLabels[type] || '';
+    // ========== 首页 — 全新设计 ==========
 
-        // 评分星星
-        const starsHtml = item.rating ? '★'.repeat(item.rating) + '☆'.repeat(5 - item.rating) : '';
+    async function renderNewHome() {
+        $.viewContainer.innerHTML = renderSkeletonNewHome();
 
-        // 卡片 CSS 类
-        let cardClass = 'feed-card';
-        if (type === 'note') cardClass += ' feed-card--note';
-        else if (type === 'review') cardClass += ' feed-card--review';
-        else if (type === 'favorite') cardClass += ' feed-card--favorite';
-        else if (type === 'daily_recommend') cardClass += ' feed-card--daily';
+        try {
+            const res = await fetch('/api/home');
+            if (!res.ok) throw new Error('加载失败');
+            const data = await res.json();
 
-        // 点击行为
-        let clickAction = '';
-        if (type === 'note') clickAction = 'feed-open-note';
-        else if (type === 'daily_recommend') clickAction = 'feed-play-recommended';
-        else if (type === 'review') clickAction = 'feed-play-song';
-        else if (type === 'favorite') clickAction = 'feed-play-song';
+            // 合并推荐歌曲到缓存
+            if (data.songs) mergeToCache(data.songs);
 
-        let html = `<div class="${cardClass}" data-action="${clickAction}" data-id="${item.id}" data-song-id="${item.song_id || ''}">`;
+            let html = '';
 
-        // 类型标签
-        html += `<div class="feed-card-type-badge">${typeBadge}</div>`;
+            // 1. Hero Banner
+            html += renderHeroBanner(data.hero);
 
-        if (type === 'note' || type === 'daily_recommend') {
-            // 文章/推荐卡片
-            const title = escapeHtml(item.title || '');
-            const summary = escapeHtml(item.summary ? item.summary.slice(0, 300) : '');
-            html += `<div class="feed-card-title">${title}</div>`;
-            if (summary) html += `<div class="feed-card-summary">${summary}</div>`;
+            // 2. 最近更新
+            html += renderRecentNotes(data.recentNotes);
 
-            // 标签
-            if (item.tags && item.tags.length > 0) {
-                html += '<div class="feed-card-tags">';
-                item.tags.forEach(t => {
-                    html += `<span class="feed-card-tag">${escapeHtml(t)}</span>`;
-                });
-                html += '</div>';
-            }
+            // 3. 推荐歌曲横滑
+            html += renderRecommendedSection(data.songs);
 
-            // 关联歌曲信息
-            if (item.song_title) {
-                html += `<div class="feed-card-song-row">
-                    ${item.cover_url ? `<img class="feed-card-song-cover" src="${escapeHtml(item.cover_url)}" alt="" decoding="async">` : ''}
-                    <div class="feed-card-song-info">
-                        <div class="feed-card-song-title">🎵 ${escapeHtml(item.song_title)}</div>
-                        <div class="feed-card-song-singer">${escapeHtml(item.singer || '')}</div>
-                    </div>
-                </div>`;
-            }
+            // 4. 最新评论
+            html += renderRecentComments(data.recentComments);
 
-            html += `<div class="feed-card-meta">${formatRelativeTime(item.timestamp)}</div>`;
-        } else if (type === 'review') {
-            // 短评卡片
-            if (item.song_title) {
-                html += `<div class="feed-card-title">${escapeHtml(item.song_title)}</div>`;
-            }
-            if (starsHtml) {
-                html += `<div class="feed-card-stars">${starsHtml}</div>`;
-            }
-            html += `<div class="feed-card-review-content">${escapeHtml(item.content || '')}</div>`;
-            html += `<div class="feed-card-meta">${formatRelativeTime(item.timestamp)}</div>`;
-        } else if (type === 'favorite') {
-            // 收藏卡片
-            if (item.song_title) {
-                html += `<div class="feed-card-song-row">
-                    ${item.cover_url ? `<img class="feed-card-song-cover" src="${escapeHtml(item.cover_url)}" alt="" decoding="async">` : ''}
-                    <div class="feed-card-song-info">
-                        <div class="feed-card-song-title">${escapeHtml(item.song_title)}</div>
-                        <div class="feed-card-song-singer">${escapeHtml(item.singer || '')}</div>
-                    </div>
-                </div>`;
-            }
-            html += `<div class="feed-card-meta">${formatRelativeTime(item.timestamp)}</div>`;
+            html += '<div style="height:24px"></div>';
+            $.viewContainer.innerHTML = html;
+        } catch (err) {
+            $.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">⚠️</span>首页加载失败<br><small>${escapeHtml(err.message)}</small></div>`;
         }
-
-        html += '</div>';
-        return html;
     }
 
-    async function renderHomeFeed() {
-        $.viewContainer.innerHTML = '<div class="skeleton-shimmer" style="height:200px;border-radius:12px;margin-bottom:12px"></div>'.repeat(5);
+    function renderSkeletonNewHome() {
+        return `
+            <div class="skeleton-shimmer" style="height:280px;border-radius:16px;margin-bottom:24px"></div>
+            <div class="skeleton-shimmer" style="height:20px;width:120px;border-radius:8px;margin-bottom:12px"></div>
+            <div style="display:flex;gap:12px;margin-bottom:28px">${'<div class="skeleton-shimmer" style="width:220px;height:100px;border-radius:12px;flex-shrink:0"></div>'.repeat(4)}</div>
+            <div class="skeleton-shimmer" style="height:20px;width:120px;border-radius:8px;margin-bottom:12px"></div>
+            <div style="display:flex;gap:12px;margin-bottom:28px">${'<div class="skeleton-shimmer" style="width:120px;height:156px;border-radius:12px;flex-shrink:0"></div>'.repeat(4)}</div>
+            <div class="skeleton-shimmer" style="height:20px;width:120px;border-radius:8px;margin-bottom:12px"></div>
+            ${'<div class="skeleton-shimmer" style="height:60px;border-radius:12px;margin-bottom:8px"></div>'.repeat(3)}
+        `;
+    }
 
-        const feed = await fetchFeed();
-        let html = '<div class="feed-timeline">';
+    // ========== Hero Banner ==========
 
-        // 每日推荐置顶
-        const dailyItems = feed.filter(i => i.type === 'daily_recommend');
-        const otherItems = feed.filter(i => i.type !== 'daily_recommend');
-
-        // 如果有每日推荐，先渲染
-        for (const item of dailyItems) {
-            html += renderFeedCard(item);
+    function renderHeroBanner(hero) {
+        if (!hero) {
+            // 默认 Hero
+            return `<div class="home-hero home-hero--default">
+                <div class="home-hero-bg-pattern"></div>
+                <div class="home-hero-gradient"></div>
+                <div class="home-hero-content">
+                    <div class="home-hero-badge">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polygon points="10,8 16,12 10,16"/></svg>
+                        音乐笔记
+                    </div>
+                    <div class="home-hero-title">青春旋律</div>
+                    <div class="home-hero-summary">记录每一首触动心弦的歌曲，分享每一段难忘的旋律</div>
+                </div>
+            </div>`;
         }
 
-        // 其余动态
-        for (const item of otherItems) {
-            html += renderFeedCard(item);
+        const coverUrl = hero.song_cover || '';
+        const title = escapeHtml(hero.title || '');
+        const summary = escapeHtml(hero.summary ? hero.summary.slice(0, 150) : '');
+        const songTitle = escapeHtml(hero.song_title || '');
+        const songSinger = escapeHtml(hero.song_singer || '');
+
+        return `<div class="home-hero">
+            ${coverUrl ? `<div class="home-hero-bg" style="background-image:url(${escapeHtml(coverUrl)})"></div>` : ''}
+            <div class="home-hero-gradient"></div>
+            ${coverUrl ? `<img class="home-hero-cover" src="${escapeHtml(coverUrl)}" alt="" decoding="async" loading="eager">` : ''}
+            <div class="home-hero-content">
+                <div class="home-hero-badge">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg>
+                    每日推荐
+                </div>
+                <div class="home-hero-title">${title}</div>
+                <div class="home-hero-summary">${summary}</div>
+                <div class="home-hero-actions">
+                    <button class="home-hero-btn home-hero-btn--primary" data-action="home-hero-play" data-song-id="${hero.song_id || ''}">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+                        播放歌曲
+                    </button>
+                    <button class="home-hero-btn home-hero-btn--secondary" data-action="feed-open-note" data-id="${hero.id}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                        阅读文章
+                    </button>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    // ========== 最近更新横滑（Bento 卡片） ==========
+
+    function renderRecentNotes(notes) {
+        if (!notes || notes.length === 0) return '';
+
+        let cardsHtml = '';
+        for (const note of notes) {
+            const date = new Date(note.published_at);
+            const dateStr = date.getFullYear() + '年' + (date.getMonth() + 1) + '月' + date.getDate() + '日';
+            const cleanTitle = escapeHtml(note.title || '');
+            const summary = note.summary
+                ? escapeHtml(note.summary.slice(0, 80))
+                : escapeHtml((note.content || '').replace(/[#*`\n\r]/g, '').slice(0, 80));
+            const tags = note.tags || [];
+            const tagsHtml = tags.slice(0, 2).map(t =>
+                `<span class="note-hscroll-tag">${escapeHtml(t)}</span>`
+            ).join('');
+
+            // 根据标题计算渐变色
+            const colorIdx = Math.abs(hashStr(note.title || '')) % 5;
+            const gradients = [
+                'linear-gradient(135deg, #1a2e25, #2d4a3a)',
+                'linear-gradient(135deg, #2e1a2e, #4a2d3a)',
+                'linear-gradient(135deg, #1a2a3e, #2d3a5a)',
+                'linear-gradient(135deg, #3e2a1a, #5a3a2d)',
+                'linear-gradient(135deg, #1a3a3e, #2d4a5a)',
+            ];
+            const gradientStyle = tags.length > 0 ? '' : `style="background:${gradients[colorIdx]}"`;
+
+            cardsHtml += `<div class="note-hscroll-card" data-action="feed-open-note" data-id="${note.id}">
+                <div class="note-hscroll-inner">
+                    <div class="note-hscroll-top">
+                        <div class="note-hscroll-icon">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                        </div>
+                        <div class="note-hscroll-date">${dateStr}</div>
+                    </div>
+                    <div class="note-hscroll-title">${cleanTitle}</div>
+                    <div class="note-hscroll-summary">${summary}</div>
+                    <div class="note-hscroll-footer">
+                        ${tagsHtml ? '<div class="note-hscroll-tags">' + tagsHtml + '</div>' : ''}
+                        <span class="note-hscroll-readmore">阅读 →</span>
+                    </div>
+                </div>
+            </div>`;
         }
 
-        html += '</div>';
+        return `<div class="home-section">
+            <div class="home-section-header">
+                <h3>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-4px;margin-right:6px"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                    最近更新
+                </h3>
+                <span class="home-section-link" data-action="nav-notes">查看全部 →</span>
+            </div>
+            <div class="notes-hscroll">${cardsHtml}</div>
+        </div>`;
+    }
 
-        // 推荐歌曲横滑
-        html += '<div class="recommended-section">';
-        html += '<div class="recommended-header">';
-        html += '<h3>🎵 推荐歌曲</h3>';
-        html += `<span class="recommended-view-all" data-action="nav-collection">查看更多 →</span>`;
-        html += '</div>';
-        html += '<div class="recommended-scroll">';
+    // ========== 推荐歌曲横滑 ==========
 
-        const songs = _defaultSongs && _defaultSongs.length > 0 ? _defaultSongs : Object.values(_songCache).slice(0, 12);
+    function renderRecommendedSection(songs) {
+        if (!songs || songs.length === 0) return '';
+
+        let itemsHtml = '';
+        window._currentSongs = songs;
+        window._currentPlaylist = null;
         for (let i = 0; i < Math.min(songs.length, 12); i++) {
             const s = songs[i];
             if (!s) continue;
-            html += `<div class="recommended-item" data-action="play-recommended" data-song-index="${i}">
-                <img class="recommended-item-cover" src="${escapeHtml(s.cover_url || '')}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'">
+            itemsHtml += `<div class="recommended-item" data-action="play-recommended" data-song-index="${i}">
+                <div class="recommended-item-cover-wrap">
+                    <img class="recommended-item-cover" src="${escapeHtml(s.cover_url || '')}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'">
+                    <div class="recommended-item-play-overlay">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>
+                    </div>
+                </div>
                 <div class="recommended-item-title">${escapeHtml(s.title || '')}</div>
                 <div class="recommended-item-singer">${escapeHtml(s.singer || '')}</div>
             </div>`;
         }
 
-        html += '</div></div>';
+        return `<div class="home-section">
+            <div class="home-section-header">
+                <h3>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-4px;margin-right:6px"><circle cx="12" cy="12" r="10"/><polygon points="10,8 16,12 10,16"/></svg>
+                    推荐歌曲
+                </h3>
+                <span class="home-section-link" data-action="nav-collection">查看更多 →</span>
+            </div>
+            <div class="recommended-scroll">${itemsHtml}</div>
+        </div>`;
+    }
 
-        $.viewContainer.innerHTML = html;
-        window._currentSongs = _defaultSongs;
-        window._currentPlaylist = null;
+    // ========== 最新评论动态 ==========
+
+    function renderRecentComments(comments) {
+        if (!comments || comments.length === 0) return '';
+
+        let itemsHtml = '';
+        for (const c of comments) {
+            const username = escapeHtml(c.username || '用户');
+            const noteTitle = escapeHtml(c.note_title || '未知文章');
+            const avatarHtml = c.avatar_url
+                ? `<img class="comment-feed-avatar" src="${escapeHtml(c.avatar_url)}" alt="" decoding="async">`
+                : `<div class="comment-feed-avatar-placeholder">${username.charAt(0).toUpperCase()}</div>`;
+
+            // 渲染评论内容（支持 [song:123] 嵌入）
+            const renderedContent = renderMarkdown(c.content || '');
+            const timeStr = formatRelativeTime(c.created_at);
+
+            itemsHtml += `<div class="comment-feed-item">
+                <div class="comment-feed-header">
+                    ${avatarHtml}
+                    <div class="comment-feed-header-text">
+                        <span class="comment-feed-user">${username}</span>
+                        <span class="comment-feed-meta">在 <span class="comment-feed-note-link" data-action="feed-open-note" data-id="${c.note_id}">${noteTitle}</span> 中评论</span>
+                    </div>
+                    <span class="comment-feed-time">${timeStr}</span>
+                </div>
+                <div class="comment-feed-text">${renderedContent}</div>
+            </div>`;
+        }
+
+        return `<div class="home-section">
+            <div class="home-section-header">
+                <h3>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-4px;margin-right:6px"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    最新评论
+                </h3>
+            </div>
+            <div class="comment-feed-list">${itemsHtml}</div>
+        </div>`;
+    }
+
+    function hashStr(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const ch = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + ch;
+            hash = hash & hash;
+        }
+        return hash;
     }
 
     // ========== 歌曲汇总导航 ==========
@@ -962,9 +1073,39 @@ const UI = (() => {
                 html += '</div>';
             }
             html += `<h1>${escapeHtml(note.title)}</h1>`;
+
+            // 关联歌曲嵌入（song_id 自动渲染可点击卡片）
+            if (note.song_id != null) {
+                const song = _songCache[note.song_id];
+                if (song) {
+                    html += `<div class="song-embed" data-song-id="${song.id}" data-action="play-embed-song" style="margin:12px 0">
+                        <span class="song-embed-icon">🎵</span>
+                        <div class="song-embed-info">
+                            <div class="song-embed-title">${escapeHtml(song.title)}</div>
+                            <div class="song-embed-singer">${escapeHtml(song.singer || '')}</div>
+                        </div>
+                    </div>`;
+                } else {
+                    // 不在缓存中，用 fallback 占位（带 data-action 使可点击）
+                    html += `<div class="song-embed" data-song-id="${note.song_id}" data-action="play-embed-song" style="margin:12px 0;opacity:0.7">
+                        <span class="song-embed-icon">🎵</span>
+                        <div class="song-embed-info">
+                            <div class="song-embed-title">加载中...</div>
+                            <div class="song-embed-singer">歌曲ID #${note.song_id}</div>
+                        </div>
+                    </div>`;
+                }
+            }
+
             html += `<div class="note-detail-meta">
-                <span>📅 ${dateStr}</span>
-                <span>☕ ${Math.ceil((note.content || '').length / 500)} 分钟阅读</span>
+                <span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                    ${dateStr}
+                </span>
+                <span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    ${Math.ceil((note.content || '').length / 500)} 分钟阅读
+                </span>
             </div>`;
             html += '<hr class="note-detail-divider">';
             html += renderMarkdown(note.content);
@@ -973,18 +1114,141 @@ const UI = (() => {
             // 管理员操作按钮
             if (window._currentUserIsAdmin) {
                 html += `<div class="note-detail-actions">
-                    <button class="note-detail-btn" data-action="edit-note" data-note-id="${note.id}">✏️ 编辑</button>
-                    <button class="note-detail-btn note-detail-btn--danger" data-action="delete-note" data-note-id="${note.id}">🗑️ 删除</button>
+                    <button class="note-detail-btn" data-action="edit-note" data-note-id="${note.id}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                        编辑
+                    </button>
+                    <button class="note-detail-btn note-detail-btn--danger" data-action="delete-note" data-note-id="${note.id}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        删除
+                    </button>
                 </div>`;
             }
 
             $.viewContainer.innerHTML = html;
+
+            // 在文章详情底部渲染评论区
+            appendComments(note.id);
         } catch (err) {
             $.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">⚠️</span>${escapeHtml(err.message)}</div>`;
         }
     }
 
-    // ========== 博客编辑器 (Note Editor) ==========
+    // ========== 评论系统 ==========
+
+    /** 在文章详情底部追加评论区 */
+    async function appendComments(noteId) {
+        const container = document.createElement('div');
+        container.id = 'commentsSection';
+        container.innerHTML = '<div class="skeleton-shimmer" style="height:60px;border-radius:12px;margin-top:32px"></div>';
+        $.viewContainer.appendChild(container);
+
+        try {
+            const [commentsRes, noteRes] = await Promise.all([
+                fetch(`/api/notes/${noteId}/comments`),
+                fetch(`/api/notes/${noteId}`),
+            ]);
+
+            if (!commentsRes.ok) throw new Error('加载评论失败');
+            const comments = await commentsRes.json();
+            const note = noteRes.ok ? await noteRes.json() : null;
+
+            renderComments(comments, noteId, note);
+        } catch (err) {
+            container.innerHTML = `<div class="comments-section"><div class="comment-empty">⚠️ 加载评论失败</div></div>`;
+        }
+    }
+
+    function renderComments(comments, noteId, note) {
+        const container = document.getElementById('commentsSection');
+        if (!container) return;
+
+        let html = '<div class="comments-section">';
+
+        // 评论标题 + 数量
+        const count = comments ? comments.length : 0;
+        html += `<div class="comments-section-header">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px;margin-right:6px"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            评论
+            <span class="comments-count">${count}</span>
+        </div>`;
+
+        // 评论表单
+        const isLoggedIn = Auth.isLoggedIn();
+        if (isLoggedIn) {
+            html += `<div class="comment-form">
+                <textarea id="commentInput" placeholder="写下你的评论..." maxlength="2000"></textarea>
+                <button class="comment-submit-btn" id="commentSubmitBtn" data-action="submit-comment">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    发表
+                </button>
+            </div>`;
+            html += `<div class="comment-hint">💡 输入 <code>[song:歌曲ID]</code> 可嵌入歌曲卡片</div>`;
+        } else {
+            html += `<div class="comment-login-hint">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px;margin-right:4px"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                <span data-action="show-auth">登录</span>后可发表评论（支持 <code>[song:ID]</code> 嵌入歌曲）
+            </div>`;
+        }
+
+        // 评论列表
+        if (comments && comments.length > 0) {
+            html += '<div class="comments-list">';
+            for (const c of comments) {
+                html += renderCommentItem(c, noteId);
+            }
+            html += '</div>';
+        } else {
+            html += '<div class="comment-empty">暂无评论，来说点什么吧～</div>';
+        }
+
+        html += '</div>';
+        container.innerHTML = html;
+
+        // 焦点到评论区域
+        const commentInput = document.getElementById('commentInput');
+        if (commentInput) {
+            // 输入提示：显示支持[song:ID]语法
+            commentInput.addEventListener('focus', () => {
+                if (!commentInput.dataset.helped) {
+                    showToast('💡 输入 [song:歌曲ID] 可嵌入歌曲卡片');
+                    commentInput.dataset.helped = 'true';
+                }
+            });
+        }
+    }
+
+    function renderCommentItem(c, noteId) {
+        const username = escapeHtml(c.username || '用户');
+        const initial = username.charAt(0).toUpperCase();
+        const avatarHtml = c.avatar_url
+            ? `<img class="comment-avatar" src="${escapeHtml(c.avatar_url)}" alt="" decoding="async">`
+            : `<div class="comment-avatar-placeholder">${initial}</div>`;
+
+        // 渲染评论内容（支持 Markdown + [song:123]）
+        const renderedContent = renderMarkdown(c.content || '');
+        const timeStr = formatRelativeTime(c.created_at);
+        const user = Auth.getUser();
+        const isOwner = user && c.user_id === user.id;
+        const isAdmin = user && (user.email === 'lexiaode@163.com' || user.email === 'quincy55@163.com');
+
+        return `<div class="comment-item" data-comment-id="${c.id}">
+            ${avatarHtml}
+            <div class="comment-body">
+                <div class="comment-meta">
+                    <span class="comment-username">${username}</span>
+                    <span class="comment-time">${timeStr}</span>
+                    ${(isOwner || isAdmin)
+                        ? `<button class="comment-delete-btn" data-action="delete-comment" data-comment-id="${c.id}">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                            删除
+                        </button>`
+                        : ''}
+                </div>
+                <div class="comment-text">${renderedContent}</div>
+            </div>
+        </div>`;
+    }
 
     async function showNoteEditor(existingNoteId) {
         if (!Auth.isLoggedIn()) { showAuthModal(); return; }
@@ -1929,8 +2193,6 @@ const UI = (() => {
         const song = Player.getCurrentSong();
         if (song && song.id) {
             fetchLyricsEmbedded(song.id);
-            // 加载短评
-            loadReviewsForSong(song.id);
         } else {
             $.lyricsPanelBody.innerHTML = `
                 <div class="lyrics-empty">
@@ -2053,202 +2315,7 @@ const UI = (() => {
         } catch (e) { /* 静默失败，本地已保存 */ }
     }
 
-    // ========== 歌曲短评 (Reviews) ==========
-
-    let _reviewCache = {};
-    const REVIEW_CACHE_MAX = 50;
-
-    async function loadReviewsForSong(songId, showAll) {
-        if (!songId) return;
-
-        // 检查歌词面板是否打开
-        const panelBody = $.lyricsPanelBody;
-        if (!panelBody) return;
-
-        try {
-            const limit = showAll ? 50 : 3;
-            const res = await fetch(`/api/reviews?song_id=${songId}&limit=${limit}`);
-            if (!res.ok) throw new Error('加载短评失败');
-            const reviews = await res.json();
-
-            const song = _songCache[songId];
-            const songTitle = song ? song.title : '';
-
-            let html = '<div class="reviews-inline">';
-            html += `<div class="reviews-inline-title">💬 短评 (${reviews.length || 0})</div>`;
-
-            if (reviews && reviews.length > 0) {
-                const showCount = showAll ? reviews.length : Math.min(reviews.length, 3);
-                for (let i = 0; i < showCount; i++) {
-                    const r = reviews[i];
-                    const stars = r.rating ? '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating) : '';
-                    html += `<div class="review-inline-item">
-                        <div class="review-inline-header">
-                            ${stars ? `<span class="review-inline-stars">${stars}</span>` : ''}
-                            <span class="review-inline-author">${escapeHtml(r.username || '匿名')}</span>
-                            ${r.is_admin ? '<span class="review-inline-admin-badge">👑</span>' : ''}
-                        </div>
-                        <div class="review-inline-content">${escapeHtml(r.content)}</div>
-                    </div>`;
-                }
-                if (!showAll && reviews.length > 3) {
-                    html += `<div class="review-inline-more" data-action="load-more-reviews" data-song-id="${songId}">查看全部 ${reviews.length} 条短评 →</div>`;
-                }
-            }
-
-            // 输入区（登录用户可见）
-            if (typeof Auth !== 'undefined' && Auth.isLoggedIn && Auth.isLoggedIn()) {
-                html += `<div class="review-input-area">
-                    <textarea id="reviewContent" placeholder="写短评（最多 300 字）..." maxlength="300"></textarea>
-                    <div class="review-input-bottom">
-                        <div class="review-star-picker" id="reviewStarPicker">
-                            <span class="star" data-rating="1">★</span>
-                            <span class="star" data-rating="2">★</span>
-                            <span class="star" data-rating="3">★</span>
-                            <span class="star" data-rating="4">★</span>
-                            <span class="star" data-rating="5">★</span>
-                        </div>
-                        <button class="btn-review-submit" data-action="submit-review" data-song-id="${songId}">发表</button>
-                    </div>
-                </div>`;
-
-                // 星星选择
-                setTimeout(() => {
-                    const picker = document.getElementById('reviewStarPicker');
-                    if (picker) {
-                        picker.addEventListener('click', (e) => {
-                            const star = e.target.closest('.star');
-                            if (!star) return;
-                            const rating = parseInt(star.dataset.rating);
-                            picker.querySelectorAll('.star').forEach((el, idx) => {
-                                el.classList.toggle('active', idx < rating);
-                            });
-                            picker.dataset.selectedRating = rating;
-                        });
-                    }
-                }, 0);
-            } else {
-                html += `<div class="review-input-area" style="text-align:center;color:var(--text-tertiary);font-size:13px;padding:12px 0">
-                    <span data-action="show-auth" style="cursor:pointer;color:var(--accent)">登录</span> 后可以写短评
-                </div>`;
-            }
-
-            html += '</div>';
-
-            panelBody.innerHTML += html;
-        } catch (err) {
-            console.error('[reviews load]', err.message);
-        }
-    }
-
-    async function submitReview(songId) {
-        if (!Auth.isLoggedIn()) { showAuthModal(); return; }
-
-        const content = document.getElementById('reviewContent')?.value?.trim();
-        if (!content) { showToast('请输入短评内容'); return; }
-
-        const picker = document.getElementById('reviewStarPicker');
-        const rating = picker ? parseInt(picker.dataset.selectedRating) || null : null;
-
-        try {
-            const res = await fetchWithAuth('/api/reviews', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ song_id: songId, rating, content }),
-            });
-
-            if (!res.ok) {
-                const err = await res.json();
-                showToast(err.error || '发表失败');
-                return;
-            }
-
-            showToast('短评已发表');
-            // 清除输入
-            const textarea = document.getElementById('reviewContent');
-            if (textarea) textarea.value = '';
-            if (picker) picker.dataset.selectedRating = '';
-
-            // 刷新短评区域
-            const panelBody = $.lyricsPanelBody;
-            if (panelBody) {
-                const existingReviews = panelBody.querySelector('.reviews-inline');
-                if (existingReviews) existingReviews.remove();
-            }
-            _feedCache = null; // 首页缓存也刷新
-            _feedCacheTime = 0;
-            loadReviewsForSong(songId, true);
-        } catch (err) {
-            showToast('网络错误');
-        }
-    }
-
-    async function deleteReview(reviewId) {
-        if (!Auth.isLoggedIn()) return;
-        if (!confirm('确定删除此短评？')) return;
-
-        try {
-            const res = await fetchWithAuth(`/api/reviews/${reviewId}`, { method: 'DELETE' });
-            if (!res.ok) throw new Error('删除失败');
-            showToast('已删除');
-        } catch (err) {
-            showToast('删除失败');
-        }
-    }
-
-    // ========== 短评汇总页 (All Reviews) ==========
-
-    async function navigateToAllReviews() {
-        _currentView = 'all-reviews';
-        updateViewHeader(false, '');
-        $.sectionHeader.style.display = 'none';
-        setActiveSidebarNav('');
-
-        // 默认活跃高亮通过 nav-all-reviews 按钮手动设置
-        document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
-        const navBtn = document.querySelector('.sidebar-item[data-nav="all-reviews"]');
-        if (navBtn) navBtn.classList.add('active');
-
-        $.viewContainer.innerHTML = '<div class="skeleton-shimmer" style="height:80px;border-radius:12px;margin-bottom:12px"></div>'.repeat(5);
-
-        try {
-            const res = await fetch('/api/reviews/recent?limit=30');
-            if (!res.ok) throw new Error('加载失败');
-            const reviews = await res.json();
-
-            let html = '<div class="reviews-list-header">💬 全部短评</div>';
-
-            if (!reviews || reviews.length === 0) {
-                html += '<div class="empty-state"><span class="empty-icon">💬</span>还没有短评</div>';
-            } else {
-                for (const r of reviews) {
-                    const stars = r.rating ? '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating) : '';
-                    const cover = r.song && r.song.cover_url ? r.song.cover_url : '';
-                    const songTitle = r.song ? r.song.title : '';
-                    const singer = r.song ? r.song.singer : '';
-                    const time = formatRelativeTime(r.created_at);
-
-                    html += `<div class="review-card" data-action="play-review-song" data-song-id="${r.song_id}">
-                        ${cover ? `<img class="review-card-cover" src="${escapeHtml(cover)}" alt="" loading="lazy" decoding="async">` : ''}
-                        <div class="review-card-body">
-                            <div class="review-card-song-name">${escapeHtml(songTitle)} — ${escapeHtml(singer)}</div>
-                            ${stars ? `<div class="review-card-stars">${stars}</div>` : ''}
-                            <div class="review-card-content">${escapeHtml(r.content)}</div>
-                            <div class="review-card-meta">
-                                ${escapeHtml(r.username || '匿名')}
-                                ${r.is_admin ? '<span class="review-card-admin-badge">👑 管理员</span>' : ''}
-                                · ${time}
-                            </div>
-                        </div>
-                    </div>`;
-                }
-            }
-
-            $.viewContainer.innerHTML = html;
-        } catch (err) {
-            $.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">⚠️</span>加载失败<br><small>${escapeHtml(err.message)}</small></div>`;
-        }
-    }
+    // ========== 歌曲短评 (Reviews) — 已删除 2026-07-03 ==========
 
     // ========== 平板底部抽屉 ==========
     function openDrawer(tab = 'fav') {
@@ -2404,7 +2471,7 @@ const UI = (() => {
                 return;
             }
 
-            // === 博客 & 短评导航 ===
+            // === 博客导航 ===
             if (action === 'nav-notes') {
                 e.preventDefault();
                 _currentView = 'notes';
@@ -2413,8 +2480,7 @@ const UI = (() => {
             }
             if (action === 'nav-all-reviews') {
                 e.preventDefault();
-                _currentView = 'all-reviews';
-                navigateToAllReviews();
+                showToast('短评功能已关闭');
                 return;
             }
             if (action === 'feed-open-note') {
@@ -2425,7 +2491,7 @@ const UI = (() => {
             if (action === 'feed-play-recommended') {
                 const songId = parseInt(btn.dataset.songId);
                 if (songId && _songCache[songId]) {
-                    Player.playSongById(songId);
+                    playSongById(songId);
                     showToast('▶ 正在播放每日推荐歌曲');
                 }
                 return;
@@ -2433,8 +2499,7 @@ const UI = (() => {
             if (action === 'feed-play-song') {
                 const songId = parseInt(btn.dataset.songId);
                 if (songId && _songCache[songId]) {
-                    Player.playSongById(songId);
-                    toggleLyricsPanel();
+                    playSongById(songId);
                 }
                 return;
             }
@@ -2446,9 +2511,11 @@ const UI = (() => {
                 return;
             }
             if (action === 'play-embed-song') {
+                e.preventDefault();
+                e.stopPropagation();
                 const songId = parseInt(btn.dataset.songId);
-                if (songId && _songCache[songId]) {
-                    Player.playSongById(songId);
+                if (songId) {
+                    playSongById(songId);
                 }
                 return;
             }
@@ -2466,32 +2533,64 @@ const UI = (() => {
                 if (!isNaN(noteId)) deleteNote(noteId);
                 return;
             }
+            if (action === 'home-hero-play') {
+                const songId = parseInt(btn.dataset.songId);
+                if (songId && _songCache[songId]) {
+                    playSongById(songId);
+                }
+                return;
+            }
+            // --- 评论事件 ---
+            if (action === 'submit-comment') {
+                e.preventDefault();
+                const commentInput = document.getElementById('commentInput');
+                if (!commentInput) return;
+                const content = commentInput.value.trim();
+                if (!content) { showToast('请输入评论内容'); return; }
+                const noteId = _currentNoteId;
+                if (!noteId) return;
+                try {
+                    const res = await fetchWithAuth(`/api/notes/${noteId}/comments`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content }),
+                    });
+                    if (!res.ok) {
+                        const err = await res.json();
+                        showToast(err.error || '评论失败');
+                        return;
+                    }
+                    // 成功，重新加载评论
+                    showToast('评论已发表');
+                    const commentsSection = document.getElementById('commentsSection');
+                    if (commentsSection) commentsSection.remove();
+                    appendComments(noteId);
+                } catch (err) {
+                    showToast('网络错误');
+                }
+                return;
+            }
+            if (action === 'delete-comment') {
+                const commentId = parseInt(btn.dataset.commentId);
+                if (!commentId || !confirm('确定要删除这条评论？')) return;
+                try {
+                    const res = await fetchWithAuth(`/api/comments/${commentId}`, { method: 'DELETE' });
+                    if (!res.ok) { showToast('删除失败'); return; }
+                    showToast('评论已删除');
+                    const item = btn.closest('.comment-item');
+                    if (item) item.remove();
+                } catch (err) {
+                    showToast('网络错误');
+                }
+                return;
+            }
             if (action === 'load-more-notes') {
                 _notesPage++;
                 await renderNotesList();
                 return;
             }
-            // --- 短评事件 ---
-            if (action === 'load-more-reviews') {
-                const songId = parseInt(btn.dataset.songId);
-                if (!isNaN(songId)) loadReviewsForSong(songId, true);
-                return;
-            }
-            if (action === 'submit-review') {
-                const songId = parseInt(btn.dataset.songId);
-                if (!isNaN(songId)) submitReview(songId);
-                return;
-            }
-            if (action === 'delete-review') {
-                const reviewId = parseInt(btn.dataset.reviewId);
-                if (!isNaN(reviewId)) deleteReview(reviewId);
-                return;
-            }
-            if (action === 'play-review-song') {
-                const songId = parseInt(btn.dataset.songId);
-                if (songId && _songCache[songId]) {
-                    Player.playSongById(songId);
-                }
+            // --- 短评事件 — 已删除 2026-07-03 ---
+            if (action === 'load-more-reviews' || action === 'submit-review' || action === 'delete-review' || action === 'play-review-song') {
                 return;
             }
             if (action === 'nav-back') {
