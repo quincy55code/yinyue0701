@@ -2050,6 +2050,558 @@ app.delete('/api/playlists/:id/songs/:songId', authMiddleware, async (req, res) 
 
 // ========== 意见反馈 ==========
 
+/** 管理员邮箱集合 */
+const ADMIN_EMAILS = new Set(['lexiaode@163.com', 'quincy55@163.com']);
+
+/** requireAdmin — 必须在 authMiddleware 之后使用 */
+function requireAdmin(req, res, next) {
+    if (!req.user || !ADMIN_EMAILS.has(req.user.email)) {
+        return res.status(403).json({ error: '仅管理员可执行此操作' });
+    }
+    next();
+}
+
+// ========== 博客文章 (Notes) CRUD ==========
+
+/** GET /api/notes — 已发布文章列表（分页） */
+app.get('/api/notes', async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+        const offset = (page - 1) * limit;
+
+        const { data, error, count } = await supabase
+            .from('notes')
+            .select('*', { count: 'exact' })
+            .eq('published', true)
+            .order('published_at', { ascending: false })
+            .range(offset, offset + limit - 1);
+
+        if (error) {
+            return res.status(500).json({ error: '查询文章失败' });
+        }
+
+        res.json({ data: data || [], total: count, page, limit });
+    } catch (err) {
+        console.error('[notes list]', err.message);
+        res.status(500).json({ error: '查询文章失败' });
+    }
+});
+
+/** GET /api/notes/admin/list — 所有文章含草稿（需管理员） */
+app.get('/api/notes/admin/list', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('notes')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            return res.status(500).json({ error: '查询文章失败' });
+        }
+        res.json(data || []);
+    } catch (err) {
+        console.error('[notes admin list]', err.message);
+        res.status(500).json({ error: '查询文章失败' });
+    }
+});
+
+/** GET /api/notes/:id — 文章详情 */
+app.get('/api/notes/:id', async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id)) return res.status(400).json({ error: '无效的文章 ID' });
+
+        const { data, error } = await supabase
+            .from('notes')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (error || !data) {
+            return res.status(404).json({ error: '文章不存在' });
+        }
+
+        // 如果是草稿且请求者不是管理员，拒绝访问
+        if (!data.published) {
+            const authHeader = req.headers.authorization;
+            if (!authHeader) return res.status(404).json({ error: '文章不存在' });
+            try {
+                const parts = authHeader.slice(7).split('.');
+                if (parts.length === 3) {
+                    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+                    if (!ADMIN_EMAILS.has(payload.email)) {
+                        return res.status(404).json({ error: '文章不存在' });
+                    }
+                } else {
+                    return res.status(404).json({ error: '文章不存在' });
+                }
+            } catch {
+                return res.status(404).json({ error: '文章不存在' });
+            }
+        }
+
+        res.json(data);
+    } catch (err) {
+        console.error('[notes detail]', err.message);
+        res.status(500).json({ error: '查询文章失败' });
+    }
+});
+
+/** POST /api/notes — 创建文章（需管理员） */
+app.post('/api/notes', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+        const { title, content, summary, cover_image, tags, daily_recommend, song_id, pinned, published } = req.body;
+
+        if (!title || typeof title !== 'string' || title.trim().length === 0) {
+            return res.status(400).json({ error: '标题不能为空' });
+        }
+        if (!content || typeof content !== 'string' || content.trim().length === 0) {
+            return res.status(400).json({ error: '内容不能为空' });
+        }
+
+        const now = new Date().toISOString();
+        const noteData = {
+            title: title.trim(),
+            content: content.trim(),
+            summary: summary || null,
+            cover_image: cover_image || null,
+            tags: Array.isArray(tags) ? tags : [],
+            daily_recommend: !!daily_recommend,
+            song_id: song_id || null,
+            pinned: !!pinned,
+            published: !!published,
+            published_at: published ? now : null,
+        };
+
+        const { data, error } = await supabase
+            .from('notes')
+            .insert(noteData)
+            .select()
+            .single();
+
+        if (error) {
+            console.error('[notes create]', error.message);
+            return res.status(500).json({ error: '创建文章失败' });
+        }
+
+        res.status(201).json(data);
+    } catch (err) {
+        console.error('[notes create]', err.message);
+        res.status(500).json({ error: '创建文章失败' });
+    }
+});
+
+/** PUT /api/notes/:id — 更新文章（需管理员） */
+app.put('/api/notes/:id', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id)) return res.status(400).json({ error: '无效的文章 ID' });
+
+        const { title, content, summary, cover_image, tags, daily_recommend, song_id, pinned, published } = req.body;
+
+        const updateData = {};
+        if (title !== undefined) updateData.title = title.trim();
+        if (content !== undefined) updateData.content = content.trim();
+        if (summary !== undefined) updateData.summary = summary || null;
+        if (cover_image !== undefined) updateData.cover_image = cover_image || null;
+        if (tags !== undefined) updateData.tags = Array.isArray(tags) ? tags : [];
+        if (daily_recommend !== undefined) updateData.daily_recommend = !!daily_recommend;
+        if (song_id !== undefined) updateData.song_id = song_id || null;
+        if (pinned !== undefined) updateData.pinned = !!pinned;
+        if (published !== undefined) {
+            updateData.published = !!published;
+            updateData.published_at = published ? new Date().toISOString() : null;
+        }
+        updateData.updated_at = new Date().toISOString();
+
+        const { data, error } = await supabase
+            .from('notes')
+            .update(updateData)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) {
+            console.error('[notes update]', error.message);
+            return res.status(500).json({ error: '更新文章失败' });
+        }
+
+        res.json(data);
+    } catch (err) {
+        console.error('[notes update]', err.message);
+        res.status(500).json({ error: '更新文章失败' });
+    }
+});
+
+/** DELETE /api/notes/:id — 删除文章（需管理员） */
+app.delete('/api/notes/:id', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id)) return res.status(400).json({ error: '无效的文章 ID' });
+
+        const { error } = await supabase
+            .from('notes')
+            .delete()
+            .eq('id', id);
+
+        if (error) {
+            console.error('[notes delete]', error.message);
+            return res.status(500).json({ error: '删除文章失败' });
+        }
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[notes delete]', err.message);
+        res.status(500).json({ error: '删除文章失败' });
+    }
+});
+
+/** POST /api/notes/:id/set-daily — 设置/取消每日推荐（需管理员） */
+app.post('/api/notes/:id/set-daily', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id)) return res.status(400).json({ error: '无效的文章 ID' });
+
+        const { daily_recommend, song_id } = req.body;
+
+        const updateData = {
+            daily_recommend: !!daily_recommend,
+            updated_at: new Date().toISOString(),
+        };
+        if (song_id !== undefined) updateData.song_id = song_id || null;
+
+        const { data, error } = await supabase
+            .from('notes')
+            .update(updateData)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) {
+            console.error('[notes set-daily]', error.message);
+            return res.status(500).json({ error: '设置每日推荐失败' });
+        }
+
+        res.json(data);
+    } catch (err) {
+        console.error('[notes set-daily]', err.message);
+        res.status(500).json({ error: '设置每日推荐失败' });
+    }
+});
+
+// ========== 歌曲短评 (Reviews) CRUD ==========
+
+/** POST /api/reviews — 写短评（需登录） */
+app.post('/api/reviews', authMiddleware, async (req, res) => {
+    try {
+        const { song_id, rating, content } = req.body;
+
+        if (!song_id || typeof song_id !== 'number') {
+            return res.status(400).json({ error: '请指定歌曲' });
+        }
+        if (!content || typeof content !== 'string' || content.trim().length === 0) {
+            return res.status(400).json({ error: '短评内容不能为空' });
+        }
+        if (content.trim().length > 500) {
+            return res.status(400).json({ error: '短评不能超过 500 字' });
+        }
+        if (rating !== undefined && (rating < 1 || rating > 5)) {
+            return res.status(400).json({ error: '评分需在 1-5 之间' });
+        }
+
+        const isAdmin = ADMIN_EMAILS.has(req.user.email);
+
+        const { data, error } = await supabase
+            .from('reviews')
+            .insert({
+                song_id,
+                user_id: req.user.id,
+                rating: rating || null,
+                content: content.trim(),
+                is_admin: isAdmin,
+            })
+            .select()
+            .single();
+
+        if (error) {
+            console.error('[reviews create]', error.message);
+            return res.status(500).json({ error: '发表短评失败' });
+        }
+
+        res.status(201).json(data);
+    } catch (err) {
+        console.error('[reviews create]', err.message);
+        res.status(500).json({ error: '发表短评失败' });
+    }
+});
+
+/** GET /api/reviews — 获取某首歌的短评 */
+app.get('/api/reviews', async (req, res) => {
+    try {
+        const songId = parseInt(req.query.song_id);
+        if (isNaN(songId)) return res.status(400).json({ error: '请指定歌曲 ID' });
+
+        const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+
+        const { data, error } = await supabase
+            .from('reviews')
+            .select('*')
+            .eq('song_id', songId)
+            .order('created_at', { ascending: false })
+            .limit(limit);
+
+        if (error) {
+            return res.status(500).json({ error: '查询短评失败' });
+        }
+
+        // 如果有用户信息，附加用户名
+        if (data && data.length > 0) {
+            const userIds = [...new Set(data.map(r => r.user_id))];
+            const { data: users } = await supabase
+                .from('users')
+                .select('id, username')
+                .in('id', userIds);
+            const userMap = {};
+            if (users) users.forEach(u => { userMap[u.id] = u.username; });
+            data.forEach(r => { r.username = userMap[r.user_id] || '匿名'; });
+        }
+
+        res.json(data || []);
+    } catch (err) {
+        console.error('[reviews list]', err.message);
+        res.status(500).json({ error: '查询短评失败' });
+    }
+});
+
+/** GET /api/reviews/recent — 最近短评 */
+app.get('/api/reviews/recent', async (req, res) => {
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 10, 30);
+
+        const { data, error } = await supabase
+            .from('reviews')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(limit);
+
+        if (error) {
+            return res.status(500).json({ error: '查询短评失败' });
+        }
+
+        // 附加用户信息
+        if (data && data.length > 0) {
+            const userIds = [...new Set(data.map(r => r.user_id))];
+            const { data: users } = await supabase
+                .from('users')
+                .select('id, username')
+                .in('id', userIds);
+            const userMap = {};
+            if (users) users.forEach(u => { userMap[u.id] = u.username; });
+            data.forEach(r => { r.username = userMap[r.user_id] || '匿名'; });
+
+            // 附加歌曲信息
+            const songIds = [...new Set(data.map(r => r.song_id))];
+            const { data: songs } = await supabase
+                .from('songs')
+                .select('id, title, singer, cover_url')
+                .in('id', songIds);
+            const songMap = {};
+            if (songs) songs.forEach(s => { songMap[s.id] = s; });
+            data.forEach(r => { r.song = songMap[r.song_id] || null; });
+        }
+
+        res.json(data || []);
+    } catch (err) {
+        console.error('[reviews recent]', err.message);
+        res.status(500).json({ error: '查询短评失败' });
+    }
+});
+
+/** DELETE /api/reviews/:id — 删除短评（作者或管理员） */
+app.delete('/api/reviews/:id', authMiddleware, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id)) return res.status(400).json({ error: '无效的短评 ID' });
+
+        // 先查询短评归属
+        const { data: review, error: findErr } = await supabase
+            .from('reviews')
+            .select('user_id')
+            .eq('id', id)
+            .single();
+
+        if (findErr || !review) {
+            return res.status(404).json({ error: '短评不存在' });
+        }
+
+        // 只允许作者或管理员删除
+        if (review.user_id !== req.user.id && !ADMIN_EMAILS.has(req.user.email)) {
+            return res.status(403).json({ error: '无权删除此短评' });
+        }
+
+        const { error } = await supabase
+            .from('reviews')
+            .delete()
+            .eq('id', id);
+
+        if (error) {
+            return res.status(500).json({ error: '删除短评失败' });
+        }
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('[reviews delete]', err.message);
+        res.status(500).json({ error: '删除短评失败' });
+    }
+});
+
+// ========== 动态流 (Feed) ==========
+
+/** GET /api/feed — 混合动态流 */
+app.get('/api/feed', async (req, res) => {
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+
+        // 并行获取 4 种数据源
+        const [notesResult, dailyResult, reviewResult, favoritesResult] = await Promise.all([
+            // 1. 博客文章（不含每日推荐）
+            supabase
+                .from('notes')
+                .select('id, title, summary, content, tags, song_id, daily_recommend, published_at')
+                .eq('published', true)
+                .eq('daily_recommend', false)
+                .order('published_at', { ascending: false })
+                .limit(limit),
+
+            // 2. 每日推荐（关联歌曲）
+            supabase
+                .from('notes')
+                .select('id, title, summary, content, tags, song_id, daily_recommend, published_at')
+                .eq('published', true)
+                .eq('daily_recommend', true)
+                .order('published_at', { ascending: false })
+                .limit(10),
+
+            // 3. 管理员短评
+            supabase
+                .from('reviews')
+                .select('id, song_id, rating, content, is_admin, created_at')
+                .eq('is_admin', true)
+                .order('created_at', { ascending: false })
+                .limit(limit),
+
+            // 4. 管理员收藏动态（从 favorites 表查询）
+            (async () => {
+                const { data: admins } = await supabase
+                    .from('users')
+                    .select('id')
+                    .in('email', [...ADMIN_EMAILS]);
+                if (!admins || admins.length === 0) return { data: [] };
+                const adminIds = admins.map(u => u.id);
+                return supabase
+                    .from('favorites')
+                    .select('id, song_id, created_at')
+                    .in('user_id', adminIds)
+                    .order('created_at', { ascending: false })
+                    .limit(limit);
+            })(),
+        ]);
+
+        const feedItems = [];
+
+        // 处理博客文章
+        if (notesResult.data) {
+            for (const note of notesResult.data) {
+                feedItems.push({
+                    type: 'note',
+                    id: note.id,
+                    title: note.title,
+                    summary: note.summary || (note.content ? note.content.slice(0, 200) : ''),
+                    tags: note.tags || [],
+                    song_id: note.song_id,
+                    timestamp: note.published_at,
+                });
+            }
+        }
+
+        // 处理每日推荐
+        if (dailyResult.data) {
+            for (const note of dailyResult.data) {
+                feedItems.push({
+                    type: 'daily_recommend',
+                    id: note.id,
+                    title: note.title,
+                    summary: note.summary || (note.content ? note.content.slice(0, 200) : ''),
+                    song_id: note.song_id,
+                    timestamp: note.published_at,
+                });
+            }
+        }
+
+        // 收集所有涉及的歌曲 ID
+        const songIds = new Set();
+        feedItems.forEach(item => { if (item.song_id) songIds.add(item.song_id); });
+
+        // 从 favoritesResult 提取
+        if (favoritesResult?.data) {
+            const favData = Array.isArray(favoritesResult.data) ? favoritesResult.data : [];
+            for (const fav of favData) {
+                feedItems.push({
+                    type: 'favorite',
+                    id: fav.id,
+                    song_id: fav.song_id,
+                    timestamp: fav.created_at,
+                });
+                if (fav.song_id) songIds.add(fav.song_id);
+            }
+        }
+
+        // 从 reviewResult.data 提取短评
+        const revArray = Array.isArray(reviewResult?.data) ? reviewResult.data : [];
+        for (const rev of revArray) {
+            feedItems.push({
+                type: 'review',
+                id: rev.id,
+                song_id: rev.song_id,
+                rating: rev.rating,
+                content: rev.content,
+                timestamp: rev.created_at,
+            });
+            if (rev.song_id) songIds.add(rev.song_id);
+        }
+
+        // 批量查询歌曲信息
+        const songMap = {};
+        if (songIds.size > 0) {
+            const { data: songs } = await supabase
+                .from('songs')
+                .select('id, title, singer, cover_url')
+                .in('id', [...songIds]);
+            if (songs) songs.forEach(s => { songMap[s.id] = s; });
+        }
+
+        // 附加歌曲信息
+        feedItems.forEach(item => {
+            if (item.song_id && songMap[item.song_id]) {
+                const s = songMap[item.song_id];
+                item.song_title = s.title;
+                item.singer = s.singer;
+                item.cover_url = s.cover_url;
+            }
+        });
+
+        // 按时间倒序排列，取前 limit 条
+        feedItems.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const result = feedItems.slice(0, limit);
+
+        res.json(result);
+    } catch (err) {
+        console.error('[feed]', err.message);
+        res.status(500).json({ error: '获取动态流失败' });
+    }
+});
+
 /** POST /api/feedback — 用户意见反馈（无需登录） */
 app.post('/api/feedback', async (req, res) => {
     const { content, contact } = req.body;
