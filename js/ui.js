@@ -28,6 +28,17 @@ const UI = (() => {
     let _collectionTree = null;         // /api/collections 返回的完整树缓存
     let _currentPlaylistId = null;      // 当前查看的歌单 ID
 
+    // 动态流 (Feed) 缓存
+    let _feedCache = null;
+    let _feedCacheTime = 0;
+    const FEED_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
+
+    // 博客文章状态
+    let _currentNoteId = null;
+    let _notesPage = 1;
+    let _notesTotal = 0;
+    let _notesLoading = false;
+
     // 嵌入式歌词状态
     let _embeddedLyricsOpen = false;
     let _embeddedLyricsLines = [];
@@ -136,6 +147,60 @@ const UI = (() => {
         const m = Math.floor(sec / 60);
         const s = Math.floor(sec % 60);
         return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    // ========== 工具函数：相对时间格式化 ==========
+    function formatRelativeTime(isoStr) {
+        if (!isoStr) return '';
+        const now = Date.now();
+        const t = new Date(isoStr).getTime();
+        const diff = now - t;
+        const minutes = Math.floor(diff / 60000);
+        if (minutes < 1) return '刚刚';
+        if (minutes < 60) return minutes + ' 分钟前';
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return hours + ' 小时前';
+        const days = Math.floor(hours / 24);
+        if (days < 7) return days + ' 天前';
+        const date = new Date(isoStr);
+        const month = date.getMonth() + 1;
+        const day = date.getDate();
+        return month + ' 月 ' + day + ' 日';
+    }
+
+    // ========== Markdown 渲染（安全） ==========
+    function renderMarkdown(text) {
+        if (!text) return '';
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            // fallback: 纯文本转义
+            return escapeHtml(text).replace(/\n/g, '<br>');
+        }
+        try {
+            const raw = marked.parse(text);
+            const clean = DOMPurify.sanitize(raw);
+            // 替换歌曲嵌入 [song:123]
+            return clean.replace(/\[song:(\d+)\]/g, (m, id) => {
+                const song = _songCache[parseInt(id)];
+                if (song) {
+                    return `<div class="song-embed" data-song-id="${song.id}" data-action="play-embed-song">
+                        <span class="song-embed-icon">🎵</span>
+                        <div class="song-embed-info">
+                            <div class="song-embed-title">${escapeHtml(song.title)}</div>
+                            <div class="song-embed-singer">${escapeHtml(song.singer || '')}</div>
+                        </div>
+                    </div>`;
+                }
+                return m; // 找不到歌曲时保留原文
+            });
+        } catch (e) {
+            return escapeHtml(text).replace(/\n/g, '<br>');
+        }
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
     }
 
     function h(html) {
@@ -516,6 +581,23 @@ const UI = (() => {
             navigateHome();
         } else if (_currentView === 'playlist-songs') {
             renderPlaylistsInContent();
+        } else if (_currentView === 'notes') {
+            navigateHome();
+        } else if (_currentView === 'note') {
+            // 从文章详情返回列表
+            if (_currentNoteId) {
+                if (window._currentUserIsAdmin) {
+                    renderNotesListAdmin();
+                } else {
+                    _currentView = 'notes';
+                    navigateToNotes();
+                }
+                _currentNoteId = null;
+                return;
+            }
+            navigateHome();
+        } else if (_currentView === 'all-reviews') {
+            navigateHome();
         }
     }
 
@@ -523,11 +605,163 @@ const UI = (() => {
         _currentView = 'home';
         _currentCollectionData = null;
         updateViewHeader(false, '');
-        $.sectionHeader.style.display = '';
-        $.sectionHeader.textContent = '🎵 推荐歌曲';
-        $.viewContainer.innerHTML = renderCoverGrid(_defaultSongs);
-        bindCardClicks();
+        $.sectionHeader.style.display = 'none';
+        renderHomeFeed();
         setActiveSidebarNav('home');
+    }
+
+    // ========== 动态流 (Feed) ==========
+
+    async function fetchFeed() {
+        const now = Date.now();
+        if (_feedCache && (now - _feedCacheTime) < FEED_CACHE_TTL) {
+            return _feedCache;
+        }
+        try {
+            const res = await fetch('/api/feed?limit=30');
+            if (!res.ok) throw new Error('Feed API error');
+            const data = await res.json();
+            _feedCache = data || [];
+            _feedCacheTime = now;
+            return _feedCache;
+        } catch (err) {
+            console.error('[feed]', err.message);
+            return [];
+        }
+    }
+
+    function renderFeedCard(item) {
+        const type = item.type;
+        const typeLabels = {
+            note: '✍️ 写了博客',
+            daily_recommend: '📌 每日推荐',
+            review: '💬 写了短评',
+            favorite: '⭐ 收藏了歌曲',
+        };
+        const typeBadge = typeLabels[type] || '';
+
+        // 评分星星
+        const starsHtml = item.rating ? '★'.repeat(item.rating) + '☆'.repeat(5 - item.rating) : '';
+
+        // 卡片 CSS 类
+        let cardClass = 'feed-card';
+        if (type === 'note') cardClass += ' feed-card--note';
+        else if (type === 'review') cardClass += ' feed-card--review';
+        else if (type === 'favorite') cardClass += ' feed-card--favorite';
+        else if (type === 'daily_recommend') cardClass += ' feed-card--daily';
+
+        // 点击行为
+        let clickAction = '';
+        if (type === 'note') clickAction = 'feed-open-note';
+        else if (type === 'daily_recommend') clickAction = 'feed-play-recommended';
+        else if (type === 'review') clickAction = 'feed-play-song';
+        else if (type === 'favorite') clickAction = 'feed-play-song';
+
+        let html = `<div class="${cardClass}" data-action="${clickAction}" data-id="${item.id}" data-song-id="${item.song_id || ''}">`;
+
+        // 类型标签
+        html += `<div class="feed-card-type-badge">${typeBadge}</div>`;
+
+        if (type === 'note' || type === 'daily_recommend') {
+            // 文章/推荐卡片
+            const title = escapeHtml(item.title || '');
+            const summary = escapeHtml(item.summary ? item.summary.slice(0, 300) : '');
+            html += `<div class="feed-card-title">${title}</div>`;
+            if (summary) html += `<div class="feed-card-summary">${summary}</div>`;
+
+            // 标签
+            if (item.tags && item.tags.length > 0) {
+                html += '<div class="feed-card-tags">';
+                item.tags.forEach(t => {
+                    html += `<span class="feed-card-tag">${escapeHtml(t)}</span>`;
+                });
+                html += '</div>';
+            }
+
+            // 关联歌曲信息
+            if (item.song_title) {
+                html += `<div class="feed-card-song-row">
+                    ${item.cover_url ? `<img class="feed-card-song-cover" src="${escapeHtml(item.cover_url)}" alt="" decoding="async">` : ''}
+                    <div class="feed-card-song-info">
+                        <div class="feed-card-song-title">🎵 ${escapeHtml(item.song_title)}</div>
+                        <div class="feed-card-song-singer">${escapeHtml(item.singer || '')}</div>
+                    </div>
+                </div>`;
+            }
+
+            html += `<div class="feed-card-meta">${formatRelativeTime(item.timestamp)}</div>`;
+        } else if (type === 'review') {
+            // 短评卡片
+            if (item.song_title) {
+                html += `<div class="feed-card-title">${escapeHtml(item.song_title)}</div>`;
+            }
+            if (starsHtml) {
+                html += `<div class="feed-card-stars">${starsHtml}</div>`;
+            }
+            html += `<div class="feed-card-review-content">${escapeHtml(item.content || '')}</div>`;
+            html += `<div class="feed-card-meta">${formatRelativeTime(item.timestamp)}</div>`;
+        } else if (type === 'favorite') {
+            // 收藏卡片
+            if (item.song_title) {
+                html += `<div class="feed-card-song-row">
+                    ${item.cover_url ? `<img class="feed-card-song-cover" src="${escapeHtml(item.cover_url)}" alt="" decoding="async">` : ''}
+                    <div class="feed-card-song-info">
+                        <div class="feed-card-song-title">${escapeHtml(item.song_title)}</div>
+                        <div class="feed-card-song-singer">${escapeHtml(item.singer || '')}</div>
+                    </div>
+                </div>`;
+            }
+            html += `<div class="feed-card-meta">${formatRelativeTime(item.timestamp)}</div>`;
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    async function renderHomeFeed() {
+        $.viewContainer.innerHTML = '<div class="skeleton-shimmer" style="height:200px;border-radius:12px;margin-bottom:12px"></div>'.repeat(5);
+
+        const feed = await fetchFeed();
+        let html = '<div class="feed-timeline">';
+
+        // 每日推荐置顶
+        const dailyItems = feed.filter(i => i.type === 'daily_recommend');
+        const otherItems = feed.filter(i => i.type !== 'daily_recommend');
+
+        // 如果有每日推荐，先渲染
+        for (const item of dailyItems) {
+            html += renderFeedCard(item);
+        }
+
+        // 其余动态
+        for (const item of otherItems) {
+            html += renderFeedCard(item);
+        }
+
+        html += '</div>';
+
+        // 推荐歌曲横滑
+        html += '<div class="recommended-section">';
+        html += '<div class="recommended-header">';
+        html += '<h3>🎵 推荐歌曲</h3>';
+        html += `<span class="recommended-view-all" data-action="nav-collection">查看更多 →</span>`;
+        html += '</div>';
+        html += '<div class="recommended-scroll">';
+
+        const songs = _defaultSongs && _defaultSongs.length > 0 ? _defaultSongs : Object.values(_songCache).slice(0, 12);
+        for (let i = 0; i < Math.min(songs.length, 12); i++) {
+            const s = songs[i];
+            if (!s) continue;
+            html += `<div class="recommended-item" data-action="play-recommended" data-song-index="${i}">
+                <img class="recommended-item-cover" src="${escapeHtml(s.cover_url || '')}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'">
+                <div class="recommended-item-title">${escapeHtml(s.title || '')}</div>
+                <div class="recommended-item-singer">${escapeHtml(s.singer || '')}</div>
+            </div>`;
+        }
+
+        html += '</div></div>';
+
+        $.viewContainer.innerHTML = html;
         window._currentSongs = _defaultSongs;
         window._currentPlaylist = null;
     }
@@ -1515,6 +1749,69 @@ const UI = (() => {
                 const bvid = btn.dataset.bvid;
                 const itemTitle = btn.dataset.itemTitle || '';
                 if (bvid) await navigateToCollectionSongs(bvid, itemTitle);
+                return;
+            }
+
+            // === 博客 & 短评导航 ===
+            if (action === 'nav-notes') {
+                e.preventDefault();
+                _currentView = 'notes';
+                navigateToNotes();
+                return;
+            }
+            if (action === 'nav-all-reviews') {
+                e.preventDefault();
+                _currentView = 'all-reviews';
+                navigateToAllReviews();
+                return;
+            }
+            if (action === 'feed-open-note') {
+                const noteId = parseInt(btn.dataset.id);
+                if (!isNaN(noteId)) navigateToNote(noteId);
+                return;
+            }
+            if (action === 'feed-play-recommended') {
+                const songId = parseInt(btn.dataset.songId);
+                if (songId && _songCache[songId]) {
+                    Player.playSongById(songId);
+                    showToast('▶ 正在播放每日推荐歌曲');
+                }
+                return;
+            }
+            if (action === 'feed-play-song') {
+                const songId = parseInt(btn.dataset.songId);
+                if (songId && _songCache[songId]) {
+                    Player.playSongById(songId);
+                    toggleLyricsPanel();
+                }
+                return;
+            }
+            if (action === 'play-recommended') {
+                const idx = parseInt(btn.dataset.songIndex);
+                if (!isNaN(idx) && window._currentSongs && window._currentSongs[idx]) {
+                    Player.playAll(window._currentSongs, idx);
+                }
+                return;
+            }
+            if (action === 'play-embed-song') {
+                const songId = parseInt(btn.dataset.songId);
+                if (songId && _songCache[songId]) {
+                    Player.playSongById(songId);
+                }
+                return;
+            }
+            if (action === 'show-note-editor') {
+                showNoteEditor();
+                return;
+            }
+            if (action === 'edit-note') {
+                const noteId = parseInt(btn.dataset.noteId);
+                if (!isNaN(noteId)) showNoteEditor(noteId);
+                return;
+            }
+            if (action === 'delete-note') {
+                const noteId = parseInt(btn.dataset.noteId);
+                if (!isNaN(noteId)) deleteNote(noteId);
                 return;
             }
             if (action === 'nav-back') {
