@@ -1109,27 +1109,32 @@ const UI = (() => {
             }
             html += `<h1>${escapeHtml(note.title)}</h1>`;
 
-            // 关联歌曲嵌入（song_id 自动渲染可点击卡片）
-            if (note.song_id != null) {
-                const song = _songCache[note.song_id];
-                if (song) {
-                    html += `<div class="song-embed" data-song-id="${song.id}" data-action="play-embed-song" style="margin:12px 0">
-                        <span class="song-embed-icon">🎵</span>
-                        <div class="song-embed-info">
-                            <div class="song-embed-title">${escapeHtml(song.title)}</div>
-                            <div class="song-embed-singer">${escapeHtml(song.singer || '')}</div>
+            // 关联歌曲嵌入（song_ids 多首，向前兼容 song_id）
+            const linkedSongs = note.songs_data || [];
+            if (linkedSongs.length > 0) {
+                mergeToCache(linkedSongs);
+                html += '<div class="note-song-list">';
+                html += '<div class="note-song-list-header">🎵 本文章提及的歌曲</div>';
+                linkedSongs.forEach((song, i) => {
+                    const cover = getCoverUrl(song);
+                    const durationStr = song.duration != null ? ' · ' + formatTime(song.duration) : '';
+                    const path = song.collection_path || '';
+                    const coverHtml = cover
+                        ? `<img class="note-song-list-cover" src="${escapeHtml(cover)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">`
+                        : '';
+                    const phStyle = cover ? 'display:none' : '';
+                    const phBg = getCoverFallbackColor(i);
+                    html += `<div class="note-song-list-item" data-song-id="${song.id}" data-action="play-embed-song" style="--stagger-index:${Math.min(i, 19)}">
+                        ${coverHtml}
+                        <div class="note-song-list-placeholder" style="${phStyle};background:${phBg}">🎵</div>
+                        <div class="note-song-list-info">
+                            <div class="note-song-list-title">${escapeHtml(song.title)} — ${escapeHtml(song.singer || '')}</div>
+                            <div class="note-song-list-meta">${durationStr}</div>
+                            ${path ? '<div class="note-song-list-path">📂 ' + escapeHtml(path) + '</div>' : ''}
                         </div>
                     </div>`;
-                } else {
-                    // 不在缓存中，用 fallback 占位（带 data-action 使可点击）
-                    html += `<div class="song-embed" data-song-id="${note.song_id}" data-action="play-embed-song" style="margin:12px 0;opacity:0.7">
-                        <span class="song-embed-icon">🎵</span>
-                        <div class="song-embed-info">
-                            <div class="song-embed-title">加载中...</div>
-                            <div class="song-embed-singer">歌曲ID #${note.song_id}</div>
-                        </div>
-                    </div>`;
-                }
+                });
+                html += '</div>';
             }
 
             html += `<div class="note-detail-meta">
@@ -1291,16 +1296,24 @@ const UI = (() => {
         const summary = isEditing ? (noteData.summary || '') : '';
         const published = isEditing ? noteData.published : false;
         const dailyRec = isEditing ? noteData.daily_recommend : false;
-        const selectedSongId = isEditing ? (noteData.song_id || null) : null;
+        let selectedSongIds = isEditing ? (noteData.song_ids || []) : [];
+        if (!selectedSongIds.length && noteData && noteData.song_id != null) {
+            selectedSongIds = [noteData.song_id];
+        }
 
         // 构建编辑器 HTML
         let tagsHtml = tags.map(t => `<span class="tag-chip">${escapeHtml(t)}<span class="remove-tag" data-action="remove-tag">×</span></span>`).join('');
-        let songSelectorHtml = '';
-        if (selectedSongId) {
-            const song = _songCache[selectedSongId];
-            songSelectorHtml = song
-                ? `<div class="song-selector-result">🎵 ${escapeHtml(song.title)} — ${escapeHtml(song.singer || '')} <span class="remove" data-action="clear-song">✕</span></div>`
-                : `<div class="song-selector-result">歌曲 #${selectedSongId} <span class="remove" data-action="clear-song">✕</span></div>`;
+
+        // 构建已选歌曲 Chips
+        let selectedSongsHtml = '';
+        if (selectedSongIds.length) {
+            selectedSongsHtml = selectedSongIds.map(id => {
+                const song = _songCache[id];
+                if (song) {
+                    return `<span class="selected-song-chip" data-song-id="${id}">🎵 ${escapeHtml(song.title)} — ${escapeHtml(song.singer || '')} <span class="remove" data-action="clear-song" data-id="${id}">✕</span></span>`;
+                }
+                return `<span class="selected-song-chip" data-song-id="${id}">歌曲 #${id} <span class="remove" data-action="clear-song" data-id="${id}">✕</span></span>`;
+            }).join('');
         }
 
         const bodyHTML = `<div class="note-editor-field">
@@ -1323,10 +1336,12 @@ const UI = (() => {
             <textarea id="noteContent">${escapeHtml(content)}</textarea>
         </div>
         <div class="note-editor-field">
-            <label>关联歌曲（输入歌曲名搜索）</label>
+            <label>关联歌曲（最多 5 首，点击搜索添加）</label>
             <div class="song-selector">
-                <input type="text" id="songSearch" placeholder="搜索歌曲..." autocomplete="off">
-                <div id="songSelectorResult">${songSelectorHtml}</div>
+                <button type="button" class="btn-song-search" id="btnSongSearch" style="padding:8px 16px;background:var(--bg-hover);border:1px solid var(--border-color);border-radius:8px;color:var(--text-primary);cursor:pointer;font-size:13px;">
+                    🔍 搜索歌曲...
+                </button>
+                <div id="selectedSongsWrap" class="selected-songs-wrap">${selectedSongsHtml}</div>
             </div>
         </div>
         <div class="toggle-row">
@@ -1355,7 +1370,7 @@ const UI = (() => {
         // 编辑状态存储
         const editorState = {
             tags: [...tags],
-            selectedSongId: selectedSongId,
+            selectedSongIds: selectedSongIds,
             isEditing: isEditing,
             noteId: isEditing ? noteData.id : null,
         };
@@ -1385,30 +1400,23 @@ const UI = (() => {
                 refreshTagChips(tagWrap, editorState.tags);
             }
             if (e.target.dataset.action === 'clear-song') {
-                editorState.selectedSongId = null;
-                document.getElementById('songSelectorResult').innerHTML = '';
+                const id = parseInt(e.target.dataset.id);
+                editorState.selectedSongIds = editorState.selectedSongIds.filter(sid => sid !== id);
+                const wrap = document.getElementById('selectedSongsWrap');
+                if (wrap) wrap.innerHTML = buildSelectedSongsHtml(editorState.selectedSongIds);
             }
         });
 
-        // 歌曲搜索
-        const songSearch = document.getElementById('songSearch');
-        if (songSearch) {
-            songSearch.addEventListener('input', debounce(async () => {
-                const q = songSearch.value.trim();
-                if (q.length < 2) return;
-                try {
-                    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-                    if (!res.ok) return;
-                    const { results } = await res.json();
-                    if (results && results.length > 0) {
-                        const s = results[0];
-                        editorState.selectedSongId = s.id;
-                        mergeToCache(results);
-                        document.getElementById('songSelectorResult').innerHTML =
-                            `<div class="song-selector-result">🎵 ${escapeHtml(s.title)} — ${escapeHtml(s.singer || '')} <span class="remove" data-action="clear-song">✕</span></div>`;
-                    }
-                } catch { /* 忽略 */ }
-            }, 400));
+        // 歌曲搜索弹窗按钮
+        const btnSongSearch = document.getElementById('btnSongSearch');
+        if (btnSongSearch) {
+            btnSongSearch.addEventListener('click', () => {
+                openSongSearchModal(editorState.selectedSongIds, (newIds) => {
+                    editorState.selectedSongIds = newIds;
+                    const wrap = document.getElementById('selectedSongsWrap');
+                    if (wrap) wrap.innerHTML = buildSelectedSongsHtml(newIds);
+                });
+            });
         }
 
         // 预览按钮
@@ -1454,6 +1462,117 @@ const UI = (() => {
         if (input) wrap.appendChild(input);
     }
 
+    // ========== 多首歌曲搜索弹窗 ==========
+
+    function openSongSearchModal(selectedIds, onConfirm) {
+        const overlay = document.createElement('div');
+        overlay.className = 'song-search-overlay';
+        overlay.innerHTML = `
+            <div class="song-search-modal">
+                <div class="song-search-header">
+                    <input type="text" id="songSearchInput" placeholder="搜索歌曲..." autocomplete="off" autofocus>
+                    <button type="button" id="songSearchClose" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:18px;">✕</button>
+                </div>
+                <div class="song-search-list" id="songSearchList">
+                    <div class="song-search-empty">输入关键词搜索歌曲</div>
+                </div>
+                <div class="song-search-footer">
+                    <button type="button" class="btn-note-save" id="songSearchDone" style="padding:8px 20px;">确定 (${selectedIds.length}/5)</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const input = overlay.querySelector('#songSearchInput');
+        const list = overlay.querySelector('#songSearchList');
+        const doneBtn = overlay.querySelector('#songSearchDone');
+        const closeBtn = overlay.querySelector('#songSearchClose');
+
+        let currentResults = [];
+
+        function renderList(results, selected) {
+            if (!results.length) {
+                list.innerHTML = '<div class="song-search-empty">未找到相关歌曲</div>';
+                return;
+            }
+            list.innerHTML = results.map(song => {
+                const isSelected = selected.includes(song.id);
+                const cover = getCoverUrl(song);
+                const path = song.collection_path || '';
+                const durationStr = song.duration != null ? ' · ' + formatTime(song.duration) : '';
+                const coverHtml = cover
+                    ? `<img class="song-search-item-cover" src="${escapeHtml(cover)}" alt="" loading="lazy">`
+                    : `<div class="song-search-item-cover" style="background:${getCoverFallbackColor(song.id)};display:flex;align-items:center;justify-content:center;font-size:14px;">🎵</div>`;
+                return `<div class="song-search-item ${isSelected ? 'selected' : ''}" data-song-id="${song.id}">
+                    ${coverHtml}
+                    <div class="song-search-item-info">
+                        <div class="song-search-item-title">${escapeHtml(song.title)} — ${escapeHtml(song.singer || '')}${durationStr}</div>
+                        ${path ? '<div class="song-search-item-meta">📂 ' + escapeHtml(path) + '</div>' : ''}
+                    </div>
+                    <div class="song-search-item-check">${isSelected ? '✓' : ''}</div>
+                </div>`;
+            }).join('');
+        }
+
+        let tempSelected = [...selectedIds];
+
+        input.addEventListener('input', debounce(async () => {
+            const q = input.value.trim();
+            if (q.length < 2) {
+                list.innerHTML = '<div class="song-search-empty">输入关键词搜索歌曲</div>';
+                return;
+            }
+            try {
+                const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+                if (!res.ok) return;
+                const data = await res.json();
+                currentResults = data.results || [];
+                mergeToCache(currentResults);
+                renderList(currentResults, tempSelected);
+            } catch {
+                list.innerHTML = '<div class="song-search-empty">搜索出错</div>';
+            }
+        }, 300));
+
+        list.addEventListener('click', (e) => {
+            const item = e.target.closest('.song-search-item');
+            if (!item) return;
+            const id = parseInt(item.dataset.songId);
+            const idx = tempSelected.indexOf(id);
+            if (idx >= 0) {
+                tempSelected.splice(idx, 1);
+            } else {
+                if (tempSelected.length >= 5) {
+                    showToast('最多选择 5 首歌曲');
+                    return;
+                }
+                tempSelected.push(id);
+            }
+            renderList(currentResults, tempSelected);
+            doneBtn.textContent = `确定 (${tempSelected.length}/5)`;
+        });
+
+        doneBtn.addEventListener('click', () => {
+            onConfirm(tempSelected);
+            overlay.remove();
+        });
+
+        const close = () => overlay.remove();
+        closeBtn.addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    }
+
+    function buildSelectedSongsHtml(ids) {
+        if (!ids || !ids.length) return '';
+        return ids.map(id => {
+            const song = _songCache[id];
+            if (song) {
+                return `<span class="selected-song-chip" data-song-id="${id}">🎵 ${escapeHtml(song.title)} — ${escapeHtml(song.singer || '')} <span class="remove" data-action="clear-song" data-id="${id}">✕</span></span>`;
+            }
+            return `<span class="selected-song-chip" data-song-id="${id}">歌曲 #${id} <span class="remove" data-action="clear-song" data-id="${id}">✕</span></span>`;
+        }).join('');
+    }
+
     async function saveNote(state, publish) {
         const title = document.getElementById('noteTitle')?.value?.trim();
         const content = document.getElementById('noteContent')?.value?.trim();
@@ -1469,7 +1588,7 @@ const UI = (() => {
             summary: summary || null,
             tags: state.tags,
             daily_recommend: dailyRec,
-            song_id: state.selectedSongId || null,
+            song_ids: state.selectedSongIds || [],
             published: publish,
         };
 
