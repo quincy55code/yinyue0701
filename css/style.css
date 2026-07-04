@@ -3809,6 +3809,273 @@ body {
 .song-embed-singer { font-size: 12px; color: var(--text-tertiary); }
 .song-embed-icon { font-size: 18px; flex-shrink: 0; }
 
+/* ============================================
+   笔记多首歌曲列表 (NOTE SONG LIST)
+   ============================================ */
+.note-song-list {
+    margin: 16px 0;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-elevated);
+}
+
+.note-song-list-header {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    padding: 10px 12px 4px 12px;
+    letter-spacing: 0.3px;
+}
+
+.note-song-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+    border-radius: 4px;
+    margin: 0 4px;
+}
+
+.note-song-list-item:hover {
+    background: var(--bg-hover);
+}
+
+.note-song-list-item:active {
+    transform: scale(0.99);
+}
+
+.note-song-list-item.playing {
+    background: rgba(77, 184, 141, 0.08);
+}
+
+.note-song-list-cover {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.note-song-list-placeholder {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.note-song-list-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.note-song-list-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.note-song-list-meta {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.note-song-list-path {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 1px;
+}
+
+.note-hscroll-songs,
+.note-card-songs {
+    font-size: 11px;
+    color: var(--accent);
+    margin-top: 4px;
+}
+
+/* 编辑器歌曲搜索结果弹窗 */
+.song-search-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.song-search-modal {
+    background: var(--bg-elevated);
+    border-radius: 16px;
+    width: 520px;
+    max-width: 90vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+
+.song-search-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 16px 0 16px;
+}
+
+.song-search-header input {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-root);
+    color: var(--text-primary);
+    font-size: 14px;
+    outline: none;
+}
+
+.song-search-header input:focus {
+    border-color: var(--accent);
+}
+
+.song-search-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+.song-search-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: background 0.12s;
+    border-left: 3px solid transparent;
+}
+
+.song-search-item:hover {
+    background: var(--bg-hover);
+}
+
+.song-search-item.selected {
+    background: rgba(77, 184, 141, 0.08);
+    border-left-color: var(--accent);
+}
+
+.song-search-item-cover {
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.song-search-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.song-search-item-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.song-search-item-meta {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.song-search-item-check {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.15s;
+    font-size: 11px;
+    color: transparent;
+}
+
+.song-search-item.selected .song-search-item-check {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+.song-search-empty {
+    padding: 32px;
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 13px;
+}
+
+.song-search-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* 编辑器多首歌曲 Chips */
+.selected-songs-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.selected-song-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px 4px 10px;
+    background: rgba(77, 184, 141, 0.12);
+    border: 1px solid rgba(77, 184, 141, 0.25);
+    border-radius: 20px;
+    font-size: 12px;
+    color: var(--text-primary);
+    cursor: default;
+}
+
+.selected-song-chip .remove {
+    cursor: pointer;
+    opacity: 0.5;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--text-secondary);
+}
+
+.selected-song-chip .remove:hover {
+    opacity: 1;
+    color: var(--accent);
+}
+
 .note-detail-actions {
     display: flex;
     gap: 10px;
