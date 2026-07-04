@@ -168,6 +168,8 @@ JOIN users u ON u.id = c.user_id ORDER BY c.created_at DESC LIMIT 10;
 
 **`playSongById(songId)` 在 ui.js 中定义，非 Player 的方法。** 功能：从 `_songCache` 查找歌曲，封装为单曲列表调用 `Player.playAll([song], 0)`。ui.js 中共有 4 处调用点（feed-play-song, feed-play-recommended, play-embed-song, home-hero-play）。
 
+**推荐歌曲播放注意：** `renderRecommendedSection()` 设置 `window._currentSongs = songs`（最多12首），`play-recommended` 动作通过 `data-song-index` 索引播放。推荐歌曲不在 `_songCache` 时也能播放，因为用的是 `window._currentSongs[idx]` 而非 `_songCache[id]`。
+
 **Data flow:**
 ```
 Browser <audio src="/api/stream/:id">  →  Express server  →  B站 API (view + playurl)  →  B站 CDN (audio/mp4)
@@ -288,7 +290,6 @@ The `[data-action]` event delegation handles all navigation: sidebar items (`nav
 ### CSS
 
 - `css/style.css` — Spotify × Apple Music fusion dark theme. **Design tokens** in `:root`: dark green background hierarchy (`--bg-root: #0B0E0C` → `--bg-elevated: #1C2320`), warm green accent (`--accent: #4DB88D`), frosted glass via `backdrop-filter: blur()` on sidebar and player bar. **Layout**: CSS Grid `.app-layout` (sidebar | content-wrapper) + `content-wrapper` flex column (top-bar | content-area). `.content-wrapper` MUST have `overflow: hidden` (not visible). **Components**: `.cover-card` (140px cover image + title/singer + hover play overlay + corner fav button), `.song-list-item` (44px thumbnail row for search), `.tag-card` (emoji icon + name + count), `.sidebar` (240px frosted, 3px green active indicator), `.player-bar` (72px frosted, 48px cover, center controls+progress, right volume popup), `.now-playing-overlay` (full-screen, 280px cover, blurred backdrop), `.lyrics-panel` (`position: fixed; z-index: 25; right: 0; width: 380px;` — slide-in via `translateX(105%)` → `translateX(0)` on `.open`). **Homepage(2026-07-03)**: `.home-hero` (300px, 模糊背景+渐变遮罩+封面+入场动画), `.home-hero--default` (无日推时的渐变背景), `.home-section` (板块容器+staggered 动画), `.notes-hscroll` (最近更新横滑 240px Bento 卡片), `.note-hscroll-inner` (140px 卡片+圆角边框+阴影), `.recommended-scroll` (推荐歌曲横滑), `.recommended-item-cover-wrap` (130px 方封面+播放 overlay), `.comment-feed-list` (最新评论动态), `.comment-feed-item` (评论卡片+border). **Comments(2026-07-03)**: `.comments-section`, `.comment-form`, `.comment-item` (34px 圆形渐变头像), `.comment-text .song-embed` (评论中的歌曲嵌入). **Animations**: `heroFadeIn`, `sectionFadeUp`, staggered card entry (`cardEnter` keyframe), skeleton shimmer, `glowPulse` for playing card, `heartPop` for fav toggle, `npoContentIn` for immersive view entrance. `prefers-reduced-motion` respected.
-- `css/lyrics.css` — Lyrics popup window styles. Shares the same CSS variable naming as the main app (dark green theme). Vertical mode: line-by-line scroll with active line in accent color; horizontal mode: two large lines centered side-by-side. Frosted glass container background.
 - `css/lyrics.css` — Lyrics popup window styles. Shares the same CSS variable naming as the main app (dark green theme). Vertical mode: line-by-line scroll with active line in accent color; horizontal mode: two large lines centered side-by-side. Frosted glass container background.
 
 ### Database (`sql/`)
@@ -492,6 +493,8 @@ ls ~/Desktop/单首歌词/calibrate_output/*_calibrated.lrc | wc -l
 36. **Add-to-playlist Hover 弹出菜单**：封面卡片和列表行的 "+" 按钮 Hover/点击弹出 `.add-to-pl-popup`（`position: fixed` 毛玻璃菜单），点击歌单名直接调用 `PlaylistStore.addToPlaylist()`。`_addPopup` 变量跟踪当前弹窗，`_addPopupTimer` 管理 300ms 延迟关闭。全局 `document.body.click` 处理关闭。不再弹出 Modal。
 
 37. **Mobile progress bar is always visible.** The `display: none` on `.player-progress` at ≤767px was removed — the progress bar now stays visible at all screen sizes. Only `.player-right` (volume) remains hidden on mobile and shows on player-bar expand.
+
+56. **`initDragScroll()` 的 `dragging` 类只能在真实拖动（移动 >5px）后添加。** `onPointerDown` 中绝不能提前加 `dragging`，因为 CSS `.notes-hscroll.dragging .note-hscroll-card { pointer-events: none }` 会立即生效，浏览器 click 事件的命中测试找不到卡片，导致横滑区域内的 `.note-hscroll-card` 和 `.recommended-item` 点击永远不触发。已在 2026-07-04 修复（commit `fd750cd` 引入的回归 bug）。
 
 ### 歌词 & BroadcastChannel
 38. **Lyrics channel name is `music_player_lyrics`.** Both `js/player.js` (main window) and `js/lyrics.js` (popup) must use the exact same `BroadcastChannel` name. Message types: `time-update` (main→lyrics, carries `currentTime` in seconds), `song-change` (main→lyrics, carries `id`), `lyrics-open` (main→lyrics). **Messages from popup are objects, not strings**: `{ type: 'lyrics-closed' }` and `{ type: 'mode-change' }`. When checking for closed popup, use `e.data && e.data.type === 'lyrics-closed'`, not `e.data === 'lyrics-closed'`. The embedded lyrics panel in `ui.js` does NOT use BroadcastChannel — it syncs directly via `Player.on()` events.

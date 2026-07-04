@@ -772,7 +772,6 @@ function initDragScroll() {
             hasMoved = false;
             startX = e.pageX || e.touches[0].pageX;
             scrollStart = container.scrollLeft;
-            container.classList.add('dragging');
 
             // 初始化速度追踪
             lastMoveTime = performance.now();
@@ -788,6 +787,7 @@ function initDragScroll() {
             const dx = (x - startX) * 2;
             if (Math.abs(dx) > 5) {
                 hasMoved = true;
+                container.classList.add('dragging');
                 e.preventDefault();
             }
             container.scrollLeft = scrollStart - dx;
