@@ -796,6 +796,7 @@ const UI = (() => {
                     </div>
                     <div class="note-hscroll-title">${cleanTitle}</div>
                     <div class="note-hscroll-summary">${summary}</div>
+                    ${note.songs_data && note.songs_data.length > 0 ? `<div class="note-hscroll-songs">🎵 ${note.songs_data.length} 首关联歌曲</div>` : ''}
                     <div class="note-hscroll-footer">
                         ${tagsHtml ? '<div class="note-hscroll-tags">' + tagsHtml + '</div>' : ''}
                         <span class="note-hscroll-readmore">阅读 →</span>
@@ -834,6 +835,7 @@ const UI = (() => {
                 <div class="note-card-date">${dateStr}</div>
                 <div class="note-card-title">${escapeHtml(note.title || '')}</div>
                 <div class="note-card-summary">${summary}</div>
+                ${note.songs_data && note.songs_data.length > 0 ? `<div class="note-card-songs">🎵 ${note.songs_data.length} 首关联歌曲</div>` : ''}
                 ${tagsHtml ? '<div class="note-card-tags">' + tagsHtml + '</div>' : ''}
             </div>`;
         }
