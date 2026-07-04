@@ -690,12 +690,171 @@ const UI = (() => {
 
             html += '<div style="height:24px"></div>';
             $.viewContainer.innerHTML = html;
+            initDragScroll(); // 初始化横滑区域的拖动滚动
         } catch (err) {
             $.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">⚠️</span>首页加载失败<br><small>${escapeHtml(err.message)}</small></div>`;
         }
     }
 
-    function renderSkeletonNewHome() {
+    // ========== 横滑区域拖动 + 动量惯性滚动 ==========
+function initDragScroll() {
+    const containers = document.querySelectorAll('.notes-hscroll, .recommended-scroll');
+    if (!containers.length) return;
+
+    containers.forEach(container => {
+        let isDragging = false;
+        let startX = 0;
+        let scrollStart = 0;
+        let hasMoved = false;
+
+        // 动量惯性状态
+        let momentumRAF = null;
+        let velocity = 0;
+        let lastMoveTime = 0;
+        let lastMoveX = 0;
+        const history = []; // [{x, time}] 采样队列
+
+        // 停止进行中的惯性动画
+        function stopMomentum() {
+            if (momentumRAF) {
+                cancelAnimationFrame(momentumRAF);
+                momentumRAF = null;
+            }
+            velocity = 0;
+            history.length = 0;
+        }
+
+        // 惯性减速动画
+        function startMomentum(initialVel) {
+            stopMomentum();
+            velocity = initialVel;
+            if (Math.abs(velocity) < 0.5) return; // 太慢不启动
+
+            let lastTime = performance.now();
+
+            function step(now) {
+                const dt = Math.min(now - lastTime, 50); // 限制最大步长 50ms
+                lastTime = now;
+
+                // 摩擦系数 0.96，帧率无关
+                velocity *= Math.pow(0.96, dt / 16.67);
+
+                const delta = velocity * dt;
+                const maxScroll = container.scrollWidth - container.clientWidth;
+                let newScroll = container.scrollLeft + delta;
+
+                // 边界弹性 — 到达边界时速度衰减更快
+                if (newScroll < 0) {
+                    newScroll = 0;
+                    velocity *= -0.3; // 反弹衰减
+                } else if (newScroll > maxScroll) {
+                    newScroll = maxScroll;
+                    velocity *= -0.3;
+                }
+
+                container.scrollLeft = newScroll;
+
+                // 继续或停止
+                if (Math.abs(velocity) > 0.5 && container.scrollLeft > 0 && container.scrollLeft < maxScroll) {
+                    momentumRAF = requestAnimationFrame(step);
+                } else {
+                    momentumRAF = null;
+                    // 惯性结束，CSS proximity snap 自动吸附对齐
+                }
+            }
+
+            momentumRAF = requestAnimationFrame(step);
+        }
+
+        const onPointerDown = (e) => {
+            stopMomentum(); // 新拖拽立即打断惯性
+            isDragging = true;
+            hasMoved = false;
+            startX = e.pageX || e.touches[0].pageX;
+            scrollStart = container.scrollLeft;
+            container.classList.add('dragging');
+
+            // 初始化速度追踪
+            lastMoveTime = performance.now();
+            lastMoveX = startX;
+            history.length = 0;
+            history.push({ x: startX, time: lastMoveTime });
+        };
+
+        const onPointerMove = (e) => {
+            if (!isDragging) return;
+            const x = e.pageX || (e.touches && e.touches[0].pageX);
+            if (x === undefined) return;
+            const dx = (x - startX) * 2;
+            if (Math.abs(dx) > 5) {
+                hasMoved = true;
+                e.preventDefault();
+            }
+            container.scrollLeft = scrollStart - dx;
+
+            // 记录移动历史（用于松手时计算速度）
+            const now = performance.now();
+            history.push({ x: x, time: now });
+            if (history.length > 6) history.shift(); // 保留最近 ~100ms
+            lastMoveX = x;
+            lastMoveTime = now;
+        };
+
+        const onPointerEnd = () => {
+            isDragging = false;
+            container.classList.remove('dragging');
+
+            // 短暂禁用元素上的点击，防止拖动误触发导航
+            if (hasMoved) {
+                container.classList.add('drag-scroll-lock');
+                setTimeout(() => container.classList.remove('drag-scroll-lock'), 80);
+            }
+
+            // ---- 计算动量惯性 ----
+            if (!hasMoved) return;
+
+            // 取历史中最近 2 个采样点计算速度
+            const len = history.length;
+            if (len < 2) return;
+
+            const latest = history[len - 1];
+            const prev = history[Math.max(0, len - 3)]; // 跳过一个采样避免瞬时噪声
+
+            const dt = latest.time - prev.time;
+            if (dt <= 0) return;
+
+            // 速度 = dx / dt (px/ms)，考虑拖动倍率 2x
+            const rawVelocity = ((prev.x - latest.x) * 2) / dt;
+            // 阈值：1.2px/ms ≈ 1200px/s 才启动惯性（太快了不好，降低到 0.5）
+            const absVel = Math.abs(rawVelocity);
+            if (absVel > 1.0) {
+                // 速度增益稍微放大，让惯性感更强
+                const gain = Math.min(1.0 + (absVel - 1.0) * 0.3, 2.0);
+                startMomentum(rawVelocity * gain);
+            }
+            // else: 慢速拖动 → CSS proximity snap 处理
+        };
+
+        // 鼠标事件
+        container.addEventListener('pointerdown', onPointerDown);
+        container.addEventListener('pointermove', onPointerMove);
+        container.addEventListener('pointerup', onPointerEnd);
+        container.addEventListener('pointerleave', (e) => {
+            // pointerleave 只在非拖拽状态忽略
+            if (isDragging) onPointerEnd(e);
+        });
+
+        // 触摸事件
+        container.addEventListener('touchstart', onPointerDown, { passive: true });
+        container.addEventListener('touchmove', onPointerMove, { passive: false });
+        container.addEventListener('touchend', onPointerEnd);
+
+        // 清理惯性（组件卸载时）
+        // 注意：container 本身没有生命周期钩子，但页面刷新时自然销毁
+    });
+}
+
+function renderSkeletonNewHome() {
         return `
             <div class="skeleton-shimmer" style="height:280px;border-radius:16px;margin-bottom:24px"></div>
             <div class="skeleton-shimmer" style="height:20px;width:120px;border-radius:8px;margin-bottom:12px"></div>
@@ -768,8 +927,8 @@ const UI = (() => {
             const dateStr = date.getFullYear() + '年' + (date.getMonth() + 1) + '月' + date.getDate() + '日';
             const cleanTitle = escapeHtml(note.title || '');
             const summary = note.summary
-                ? escapeHtml(note.summary.slice(0, 80))
-                : escapeHtml((note.content || '').replace(/[#*`\n\r]/g, '').slice(0, 80));
+                ? escapeHtml(note.summary.slice(0, 60))
+                : escapeHtml((note.content || '').replace(/[#*`\n\r]/g, '').slice(0, 60));
             const tags = note.tags || [];
             const tagsHtml = tags.slice(0, 2).map(t =>
                 `<span class="note-hscroll-tag">${escapeHtml(t)}</span>`

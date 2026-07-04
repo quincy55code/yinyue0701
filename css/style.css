@@ -3411,12 +3411,49 @@ body {
     gap: 14px;
     overflow-x: auto;
     padding-bottom: 10px;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    scroll-behavior: smooth;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    /* 左右边缘渐淡 — 卡片进入/离开时柔化提示 */
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, black 3%, black 97%, transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0%, black 3%, black 97%, transparent 100%);
+    -webkit-mask-composite: add;
+    mask-composite: add;
 }
-.notes-hscroll::-webkit-scrollbar { height: 4px; }
-.notes-hscroll::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 2px; }
-.notes-hscroll::-webkit-scrollbar-track { background: transparent; }
+.notes-hscroll::-webkit-scrollbar,
+.recommended-scroll::-webkit-scrollbar {
+    display: none;
+}
+/* Touch 优化 — 告知浏览器仅水平滚动 */
+.notes-hscroll,
+.recommended-scroll {
+    touch-action: pan-x;
+}
+
+.notes-hscroll,
+.recommended-scroll {
+    cursor: grab;
+}
+
+.notes-hscroll:active,
+.recommended-scroll:active {
+    cursor: grabbing;
+}
+
+/* 拖动滚动时禁用子元素点击（防止拖动误触发导航） */
+.notes-hscroll.drag-scroll-lock .note-hscroll-card,
+.recommended-scroll.drag-scroll-lock .recommended-item {
+    pointer-events: none;
+}
+
+/* 拖动中禁用子元素点击和文本选中 */
+.notes-hscroll.dragging .note-hscroll-card,
+.recommended-scroll.dragging .recommended-item {
+    pointer-events: none;
+    user-select: none;
+}
 .note-hscroll-card {
     flex-shrink: 0;
     width: 240px;
@@ -3430,7 +3467,7 @@ body {
     background: var(--bg-elevated);
     border-radius: 14px;
     padding: 20px;
-    height: 140px;
+    height: 170px;
     display: flex;
     flex-direction: column;
     transition: background 0.2s, box-shadow 0.2s;
@@ -3441,6 +3478,7 @@ body {
     background: var(--bg-hover);
     box-shadow: 0 8px 24px rgba(0,0,0,0.25);
     border-color: var(--border-active);
+    transform: scale(1.02);
 }
 .note-hscroll-top {
     display: flex;
@@ -3468,12 +3506,13 @@ body {
     font-size: 15px;
     font-weight: 600;
     color: var(--text-primary);
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     line-height: 1.3;
     display: -webkit-box;
-    -webkit-line-clamp: 1;
+    -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    min-height: 0;
 }
 .note-hscroll-summary {
     font-size: 12px;
@@ -3483,14 +3522,15 @@ body {
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    flex: 1;
-    margin-bottom: 8px;
+    flex-shrink: 0;
+    margin-bottom: 6px;
 }
 .note-hscroll-footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    flex-shrink: 0;
 }
 .note-hscroll-tags { display: flex; gap: 4px; flex-wrap: wrap; min-width: 0; overflow: hidden; }
 .note-hscroll-tag {
@@ -3517,12 +3557,17 @@ body {
     gap: 14px;
     overflow-x: auto;
     padding-bottom: 8px;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    scroll-behavior: smooth;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    /* 左右边缘渐淡 */
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, black 3%, black 97%, transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0%, black 3%, black 97%, transparent 100%);
+    -webkit-mask-composite: add;
+    mask-composite: add;
 }
-.recommended-scroll::-webkit-scrollbar { height: 4px; }
-.recommended-scroll::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 2px; }
-.recommended-scroll::-webkit-scrollbar-track { background: transparent; }
 .recommended-item {
     flex-shrink: 0;
     width: 130px;
@@ -3904,7 +3949,10 @@ body {
 .note-card-songs {
     font-size: 11px;
     color: var(--accent);
-    margin-top: 4px;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* 编辑器歌曲搜索结果弹窗 */
