@@ -124,6 +124,12 @@ const UI = (() => {
         $.drawerPl = document.getElementById('drawerPl');
         $.fabDrawer = document.getElementById('fabDrawer');
 
+        // 手机侧边抽屉
+        $.mobileDrawerOverlay = document.getElementById('mobileDrawerOverlay');
+        $.mobileDrawer = document.getElementById('mobileDrawer');
+        $.mobileDrawerBody = document.getElementById('mobileDrawerBody');
+        $.mobileDrawerClose = document.getElementById('mobileDrawerClose');
+
         // 嵌入式歌词面板
         $.lyricsPanel = document.getElementById('lyricsPanel');
         $.lyricsPanelBody = document.getElementById('lyricsPanelBody');
@@ -2699,6 +2705,39 @@ function renderSkeletonNewHome() {
         }, 400);
     }
 
+    // ========== 手机侧边抽屉 ==========
+    function toggleMobileDrawer() {
+        if ($.mobileDrawerOverlay.classList.contains('show')) {
+            closeMobileDrawer();
+        } else {
+            openMobileDrawer();
+        }
+    }
+
+    function openMobileDrawer() {
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar && $.mobileDrawerBody) {
+            $.mobileDrawerBody.innerHTML = sidebar.innerHTML;
+        }
+        $.mobileDrawerOverlay.style.display = 'block';
+        $.mobileDrawer.style.display = 'flex';
+        requestAnimationFrame(() => {
+            $.mobileDrawerOverlay.classList.add('show');
+            $.mobileDrawer.classList.add('show');
+        });
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeMobileDrawer() {
+        $.mobileDrawerOverlay.classList.remove('show');
+        $.mobileDrawer.classList.remove('show');
+        document.body.style.overflow = '';
+        setTimeout(() => {
+            $.mobileDrawerOverlay.style.display = '';
+            $.mobileDrawer.style.display = '';
+        }, 400);
+    }
+
     // ========== 卡片点击绑定 ==========
     /**
      * bindCardClicks 已移除 — 点击逻辑已合并到 setupGlobalDelegation。
@@ -3216,6 +3255,17 @@ function renderSkeletonNewHome() {
         document.querySelectorAll('.drawer-tab').forEach(tab => {
             tab.addEventListener('click', () => openDrawer(tab.dataset.drawerTab));
         });
+
+        // 手机侧边抽屉
+        if ($.btnMenu) {
+            $.btnMenu.addEventListener('click', toggleMobileDrawer);
+        }
+        if ($.mobileDrawerOverlay) {
+            $.mobileDrawerOverlay.addEventListener('click', closeMobileDrawer);
+        }
+        if ($.mobileDrawerClose) {
+            $.mobileDrawerClose.addEventListener('click', closeMobileDrawer);
+        }
 
         // 滚动阴影
         $.contentArea.addEventListener('scroll', () => {
