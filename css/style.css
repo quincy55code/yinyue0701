@@ -4500,4 +4500,398 @@ body {
     .home-hero-btn { font-size: 12px; padding: 6px 14px; }
     .recommended-item { width: 100px; }
     .recommended-item-cover-wrap { width: 100px; height: 100px; }
+
+    /* ============================================
+       MOBILE DRAWER (手机侧边抽屉)
+       ============================================ */
+    .mobile-drawer-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        z-index: 200;
+        opacity: 0;
+        transition: opacity var(--duration-base) var(--ease-out);
+    }
+
+    .mobile-drawer-overlay.show {
+        display: block;
+        opacity: 1;
+    }
+
+    .mobile-drawer {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 280px;
+        max-width: 80vw;
+        background: var(--bg-elevated);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-right: 1px solid var(--border-default);
+        z-index: 201;
+        flex-direction: column;
+        transform: translateX(-100%);
+        transition: transform var(--duration-slow) var(--ease-spring);
+        padding-top: env(safe-area-inset-top, 0px);
+    }
+
+    .mobile-drawer.show {
+        display: flex;
+        transform: translateX(0);
+    }
+
+    .mobile-drawer-header {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border-subtle);
+        flex-shrink: 0;
+    }
+
+    .mobile-drawer-close {
+        width: 32px;
+        height: 32px;
+        border: none;
+        background: transparent;
+        color: var(--text-tertiary);
+        font-size: 18px;
+        cursor: pointer;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: color var(--duration-fast) var(--ease-out),
+                    background var(--duration-fast) var(--ease-out);
+    }
+
+    .mobile-drawer-close:hover {
+        color: var(--text-primary);
+        background: var(--bg-hover);
+    }
+
+    .mobile-drawer-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px 0;
+    }
+
+    .mobile-drawer-body .sidebar-brand {
+        padding: 12px 16px;
+    }
+
+    .mobile-drawer-body .sidebar-nav {
+        padding: 4px 8px;
+    }
+
+    .mobile-drawer-body .sidebar-item {
+        padding: 10px 12px;
+        font-size: 14px;
+        min-height: 44px;
+    }
+
+    .mobile-drawer-body .sidebar-tags {
+        padding: 4px 8px;
+    }
+
+    .mobile-drawer-body .sidebar-tag-item {
+        padding: 10px 12px;
+        font-size: 14px;
+        min-height: 44px;
+    }
+
+    .mobile-drawer-body .sidebar-section-label {
+        padding: 8px 16px 4px;
+    }
+
+    .mobile-drawer-body .sidebar-divider {
+        margin: 6px 16px;
+    }
+
+    .mobile-drawer-body .sidebar-spacer {
+        display: none;
+    }
+
+    .mobile-drawer-body .sidebar-user {
+        padding: 8px 12px 16px;
+    }
+
+    .mobile-drawer-body .btn-login {
+        min-height: 44px;
+    }
+
+    /* ============================================
+       PLAYER BAR EXPAND PANEL (手机播放栏展开面板)
+       ============================================ */
+    .player-bar.expanded {
+        height: auto;
+        flex-wrap: wrap;
+        padding: var(--space-sm) var(--space-md) var(--space-md);
+        gap: var(--space-sm);
+        align-items: flex-start;
+    }
+
+    .player-bar.expanded .player-center {
+        width: 100%;
+        max-width: 100%;
+        order: 3;
+        padding-top: var(--space-sm);
+        border-top: 1px solid var(--border-subtle);
+    }
+
+    .player-bar.expanded .player-now {
+        max-width: 70%;
+    }
+
+    .player-bar.expanded .player-right {
+        display: flex;
+        margin-left: auto;
+    }
+
+    .player-bar.expanded .btn-mode {
+        display: flex;
+    }
+
+    .player-bar.expanded .btn-ctrl {
+        width: 36px;
+        height: 36px;
+        font-size: 18px;
+    }
+
+    .player-bar.expanded .play-btn {
+        width: 44px;
+        height: 44px;
+        font-size: 20px;
+    }
+
+    .player-bar.expanded .player-controls {
+        gap: var(--space-md);
+    }
+
+    .player-bar.expanded .player-progress {
+        gap: 6px;
+        width: 100%;
+    }
+
+    .player-bar.expanded .player-progress .progress-time {
+        font-size: 11px;
+        width: 32px;
+    }
+
+    /* ============================================
+       LYRICS PANEL BOTTOM SHEET (手机歌词面板底部弹出)
+       ============================================ */
+    .lyrics-panel {
+        top: auto;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        width: 100%;
+        max-width: 100%;
+        height: 60vh;
+        border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+        border-left: none;
+        border-top: 1px solid var(--border-subtle);
+        transform: translateY(100%);
+        transition: transform var(--duration-slow) var(--ease-spring);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    .lyrics-panel.open {
+        transform: translateY(0);
+    }
+
+    .lyrics-panel-body {
+        padding: var(--space-md) var(--space-sm);
+        gap: clamp(4px, 1vh, 8px);
+    }
+
+    .lyrics-panel-body .lyric-line {
+        font-size: 13px;
+    }
+
+    .lyrics-panel-body .lyric-line.active {
+        font-size: 17px;
+    }
+
+    .lyrics-panel-header {
+        padding-top: 12px;
+        position: relative;
+    }
+
+    .lyrics-panel-header::before {
+        content: '';
+        position: absolute;
+        top: 6px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 36px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--text-tertiary);
+        opacity: 0.3;
+    }
+
+    /* ============================================
+       SEARCH BAR (手机搜索展开)
+       ============================================ */
+    .search-wrap {
+        max-width: 100%;
+        transition: max-width var(--duration-base) var(--ease-out);
+    }
+
+    .search-wrap:focus-within {
+        max-width: 100%;
+    }
+
+    .search-confirm {
+        display: none;
+    }
+
+    .search-input {
+        padding-right: 36px;
+        font-size: 16px;
+    }
+
+    /* ============================================
+       SEARCH RESULT LIST (操作按钮始终可见)
+       ============================================ */
+    .song-list-actions {
+        opacity: 1 !important;
+    }
+
+    .btn-fav, .btn-add, .btn-copy-link {
+        width: 28px;
+        height: 28px;
+        font-size: 15px;
+        opacity: 0.5;
+    }
+
+    .btn-fav.favorited {
+        opacity: 1;
+    }
+
+    /* ============================================
+       COVER GRID (更紧凑)
+       ============================================ */
+    .cover-grid {
+        gap: var(--space-sm);
+    }
+
+    .cover-card {
+        padding: var(--space-sm) var(--space-sm) var(--space-md);
+    }
+
+    .cover-card-img-wrap {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 1;
+    }
+
+    .cover-card-title {
+        font-size: 12px;
+    }
+
+    /* ============================================
+       TAG GRID (更紧凑)
+       ============================================ */
+    .tag-card {
+        min-height: 110px;
+        padding: 12px 8px;
+    }
+
+    .tag-card-name {
+        font-size: 13px;
+    }
+
+    /* ============================================
+       HOMEPAGE HERO
+       ============================================ */
+    .home-hero {
+        height: 180px;
+        margin-bottom: var(--space-md);
+    }
+
+    .home-hero-cover {
+        width: 72px;
+        height: 72px;
+        right: 12px;
+        bottom: 12px;
+    }
+
+    .home-hero-content {
+        padding: 16px;
+        max-width: 75%;
+    }
+
+    .home-hero-title {
+        font-size: 16px;
+        -webkit-line-clamp: 1;
+    }
+
+    .home-hero-badge {
+        font-size: 10px;
+        padding: 2px 8px;
+    }
+
+    /* ============================================
+       HSCROLL NOTES + RECOMMENDED
+       ============================================ */
+    .note-hscroll-card {
+        width: 150px;
+        min-width: 150px;
+    }
+
+    .note-hscroll-inner {
+        height: 120px;
+        padding: 14px;
+    }
+
+    .note-hscroll-title {
+        font-size: 14px;
+    }
+
+    .note-hscroll-tag {
+        font-size: 9px;
+    }
+
+    .recommended-item {
+        width: 90px;
+    }
+
+    .recommended-item-cover-wrap {
+        width: 90px;
+        height: 90px;
+    }
+
+    .recommended-item-title {
+        font-size: 11px;
+    }
+
+    /* ============================================
+       TOP BAR
+       ============================================ */
+    .top-bar-spacer {
+        display: none;
+    }
+
+    /* ============================================
+       iOS SAFE AREA
+       ============================================ */
+    .player-bar {
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    .content-area {
+        padding-bottom: calc(var(--space-md) + env(safe-area-inset-bottom, 0px));
+    }
+
+    .fab-drawer-trigger {
+        bottom: calc(var(--player-height) + var(--space-md) + env(safe-area-inset-bottom, 0px));
+    }
 }
