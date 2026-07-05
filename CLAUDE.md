@@ -317,3 +317,49 @@ python scripts/calibrate_lyrics.py --offset=100 --limit=500
 ### ECS & 阿里云 ASR
 39. **ECS Supabase key**: inject via `/tmp/key_b64.txt` (base64) in wrapper script; don't pass JWT in SSH.
 40. **ASR 网关 URL**: `https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/asr` (not `/rest/v1/asr/sentence`).
+
+## Production Deployment (阿里云 ECS)
+
+**Live site**: http://music258.com (ECS `i-bp18v2inztg7q1wuwgp9`, 公网 IP `121.41.45.199`, cn-hangzhou, Alibaba Cloud Linux 3.2104 LTS, 2核 2GiB).
+
+**Architecture**:
+```
+浏览器 → http://music258.com (DNS A 记录 → 121.41.45.199)
+  → Nginx (监听 0.0.0.0:80)
+     ├─ 静态文件直出 (root /opt/music258)
+     └─ /api/* 反向代理 → http://127.0.0.1:8765
+          → Node.js server.js (PM2 守护，开机自启)
+             → Supabase 云数据库 (HTTPS)
+```
+
+**部署工具**: [scripts/deploy_music258.js](scripts/deploy_music258.js) — 通过阿里云 ECS `RunCommand` API 远程执行命令（HMAC-SHA1 v1 签名），无需 SSH。已加入 `.gitignore`（含 AccessKey）。
+```bash
+/d/softwa/nodejs/node scripts/deploy_music258.js all      # 全流程
+/d/softwa/nodejs/node scripts/deploy_music258.js env      # 安装 Node.js/Nginx/PM2
+/d/softwa/nodejs/node scripts/deploy_music258.js upload    # 上传项目代码（base64 分块）
+/d/softwa/nodejs/node scripts/deploy_music258.js app       # 启动 PM2
+/d/softwa/nodejs/node scripts/deploy_music258.js nginx      # 配置 Nginx 反向代理
+/d/softwa/nodejs/node scripts/deploy_music258.js verify     # 健康检查
+```
+
+**关键 ECS 配置路径**:
+- 项目目录: `/opt/music258/`
+- Nginx 配置: `/etc/nginx/conf.d/music258.conf`
+- PM2 进程名: `music258` (启动: `pm2 start server.js --name music258`)
+- PM2 日志: `/root/.pm2/logs/music258-{out,error}.log`
+
+**ECS 上的关键坑**:
+41. **Node.js 20 + @supabase/realtime-js 必须显式传 `ws`**: server.js:42 处 `createClient()` 必须传 `{ realtime: { transport: ws } }`，否则启动时崩溃报 "Node.js 20 detected without native WebSocket support"。`ws` 包已加入 [package.json](package.json)。
+42. **RunCommand 命令长度限制 ~12KB**: 超长命令（如大文件 base64）必须分块上传，每块 ≤12000 字符 base64。`uploadFile()` 已实现该逻辑。
+43. **RunCommand 复合命令容易 "Unknown: No message" 失败**: 把多步骤合并成一条 `&&` 长命令时高风险。改为分开调用 `RunCommand`（每条一个动作），失败率显著下降。
+44. **PM2 启动后需 `pm2 save` + `systemctl enable nginx`** 才能开机自启。
+45. **ECS 安全组必须放行 80/443**: 在阿里云控制台 → ECS → 安全组 → 入方向规则。
+46. **DNS A 记录** (`@` 和 `www` → `121.41.45.199`) 在阿里云域名解析控制台手动添加。
+
+**HTTPS ✅**: 已于 2026-07-05 启用。阿里云 SSL 免费证书（覆盖 `music258.com` + `www.music258.com`）→ 上传至 `/etc/nginx/ssl/` → Nginx 配置含 443 ssl http2 + HTTP→HTTPS 301 + HSTS。PM2 `ALLOWED_ORIGIN` 已设为 `https://music258.com`。重新部署 SSL 配置（证书就绪后）：
+```bash
+/d/softwa/nodejs/node scripts/deploy_music258.js ssl
+```
+注意：`deploy_music258.js` 的 `all` 阶段**跳过 ssl**（证书需手动准备），需单独执行 `ssl`。安全组 443 端口已在阿里云控制台放过。`certs/*.{key,pem}` 已加入 `.gitignore`。
+
+**AccessKey 安全**: 部署用的 AccessKey (`LTAI5t9zffQbY3MmXmy7J9d1`) 已在聊天记录中泄露，部署完成后必须立刻在阿里云 RAM 控制台禁用并轮换。

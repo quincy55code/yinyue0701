@@ -31,6 +31,9 @@ const path = require('path');
 
 const { createClient } = require('@supabase/supabase-js');
 
+// Node.js 20 需要显式传入 ws 给 realtime-js
+const ws = require('ws');
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
@@ -39,14 +42,20 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    db: { schema: 'public' },
+    realtime: { transport: ws },
+});
 
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!SUPABASE_SERVICE_ROLE_KEY) {
     console.error('[init] 缺少 SUPABASE_SERVICE_ROLE_KEY，请检查 .env 文件');
     process.exit(1);
 }
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    db: { schema: 'public' },
+    realtime: { transport: ws },
+});
 
 const JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
 if (!JWT_SECRET) {

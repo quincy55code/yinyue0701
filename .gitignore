@@ -6,3 +6,6 @@ scripts/fix_ecs_config.py
 scripts/run_fix_batch.py
 scripts/setup_ecs_ssh.py
 scripts/verify_lyrics_audio.py
+scripts/deploy_music258.js
+certs/*.key
+certs/*.pem
