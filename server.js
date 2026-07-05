@@ -1,5 +1,5 @@
 /**
- * 音乐播放器 — Node.js 后端
+ * 听歌日记 — Node.js 后端
  * 代理 B站 DASH 音频流 + Supabase 数据查询
  */
 
@@ -1071,17 +1071,17 @@ app.post('/api/auth/send-code', async (req, res) => {
 
         // 发送邮件（非阻塞 — 用户无需等待邮件发送完成）
         mailTransporter.sendMail({
-            from: '"青春旋律" <lexiaode@163.com>',
+            from: '"听歌日记" <lexiaode@163.com>',
             to: email,
-            subject: '青春旋律 - 登录验证码',
-            text: `您的验证码是：${code}\n\n有效期 2 分钟，请勿将验证码泄露给他人。\n\n—— 青春旋律音乐播放器`,
+            subject: '听歌日记 - 登录验证码',
+            text: `您的验证码是：${code}\n\n有效期 2 分钟，请勿将验证码泄露给他人。\n\n—— 听歌日记`,
             html: `<div style="max-width:480px;margin:0 auto;padding:24px;font-family:Arial,sans-serif;background:#0B0E0C;color:#EDF0EE;border-radius:12px">
-                <h2 style="color:#4DB88D">🎵 青春旋律</h2>
+                <h2 style="color:#4DB88D">🎵 听歌日记</h2>
                 <p style="font-size:16px;margin:20px 0">您的登录验证码是：</p>
                 <div style="background:#1C2320;padding:16px 24px;border-radius:8px;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;color:#4DB88D">${code}</div>
                 <p style="font-size:13px;color:#9BA89F;margin-top:20px">有效期 2 分钟，请勿将验证码泄露给他人。</p>
                 <hr style="border-color:rgba(255,255,255,0.05);margin:20px 0">
-                <p style="font-size:12px;color:#5D6B62">—— 青春旋律音乐播放器</p>
+                <p style="font-size:12px;color:#5D6B62">—— 听歌日记</p>
             </div>`,
         }).catch(err => console.error('[send-code] 邮件发送失败:', err.message));
 
@@ -2764,17 +2764,17 @@ app.post('/api/feedback', async (req, res) => {
         const contactInfo = contact ? `\n联系方式：${contact}` : '';
 
         mailTransporter.sendMail({
-            from: '"青春旋律反馈" <lexiaode@163.com>',
+            from: '"听歌日记反馈" <lexiaode@163.com>',
             to: 'lexiaode@163.com',
-            subject: `[青春旋律反馈] 来自用户的意见 (${timeStr})`,
-            text: `反馈时间：${timeStr}\n\n反馈内容：\n${content.trim()}${contactInfo}\n\n—— 青春旋律音乐播放器`,
+            subject: `[听歌日记反馈] 来自用户的意见 (${timeStr})`,
+            text: `反馈时间：${timeStr}\n\n反馈内容：\n${content.trim()}${contactInfo}\n\n—— 听歌日记`,
             html: `<div style="max-width:480px;margin:0 auto;padding:24px;font-family:Arial,sans-serif;background:#0B0E0C;color:#EDF0EE;border-radius:12px">
                 <h2 style="color:#4DB88D">💬 用户反馈</h2>
                 <p style="font-size:12px;color:#5D6B62">反馈时间：${timeStr}</p>
                 <div style="background:#1C2320;padding:16px;border-radius:8px;margin:16px 0;font-size:15px;line-height:1.6;white-space:pre-wrap">${content.trim()}</div>
                 ${contact ? `<p style="font-size:13px;color:#9BA89F">联系方式：${contact}</p>` : ''}
                 <hr style="border-color:rgba(255,255,255,0.05);margin:20px 0">
-                <p style="font-size:12px;color:#5D6B62">—— 青春旋律音乐播放器</p>
+                <p style="font-size:12px;color:#5D6B62">—— 听歌日记</p>
             </div>`,
         }).catch(err => console.error('[feedback] 邮件发送失败:', err.message));
 
@@ -2786,7 +2786,7 @@ app.post('/api/feedback', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`🎵 音乐播放器后端已启动 → http://localhost:${PORT}`);
+    console.log(`🎵 听歌日记 — 后端已启动 → http://localhost:${PORT}`);
     console.log(`   歌曲列表: http://localhost:${PORT}/api/songs`);
     console.log(`   搜索接口: http://localhost:${PORT}/api/search?q=离别`);
     console.log(`   前端页面: http://localhost:${PORT}`);

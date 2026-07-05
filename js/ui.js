@@ -663,12 +663,34 @@ const UI = (() => {
     // ========== 首页 — 全新设计 ==========
 
     async function renderNewHome() {
+        // === 缓存检查：5 分钟内缓存的首页 HTML 直接显示，不请求网络 ===
+        const now = Date.now();
+        if (_feedCache && (now - _feedCacheTime < FEED_CACHE_TTL)) {
+            $.viewContainer.innerHTML = _feedCache;
+            initDragScroll();
+            return;
+        }
+
         $.viewContainer.innerHTML = renderSkeletonNewHome();
 
         try {
-            const res = await fetch('/api/home');
-            if (!res.ok) throw new Error('加载失败');
-            const data = await res.json();
+            // 优先使用 bootstrap 预取的数据，避免串行 fetch /api/home
+            let data = window._prefetchedHomeData;
+            if (data) {
+                window._prefetchedHomeData = null; // 用掉即释放
+            } else {
+                // 如果预取还在进行中，等待它完成
+                if (window._bootstrapHomePromise) {
+                    data = await window._bootstrapHomePromise;
+                    window._bootstrapHomePromise = null;
+                }
+            }
+            // 预取未命中则回退直接请求
+            if (!data) {
+                const res = await fetch('/api/home');
+                if (!res.ok) throw new Error('加载失败');
+                data = await res.json();
+            }
 
             // 合并推荐歌曲到缓存
             if (data.songs) mergeToCache(data.songs);
@@ -691,6 +713,10 @@ const UI = (() => {
             html += '<div style="height:24px"></div>';
             $.viewContainer.innerHTML = html;
             initDragScroll(); // 初始化横滑区域的拖动滚动
+
+            // === 缓存渲染后的 HTML，下次导航到首页时直接复用 ===
+            _feedCache = html;
+            _feedCacheTime = now;
         } catch (err) {
             $.viewContainer.innerHTML = `<div class="empty-state"><span class="empty-icon">⚠️</span>首页加载失败<br><small>${escapeHtml(err.message)}</small></div>`;
         }
@@ -877,10 +903,10 @@ function renderSkeletonNewHome() {
                 <div class="home-hero-content">
                     <div class="home-hero-badge">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polygon points="10,8 16,12 10,16"/></svg>
-                        音乐笔记
+                        音乐日记
                     </div>
-                    <div class="home-hero-title">青春旋律</div>
-                    <div class="home-hero-summary">记录每一首触动心弦的歌曲，分享每一段难忘的旋律</div>
+                    <div class="home-hero-title">听歌日记</div>
+                    <div class="home-hero-summary">记录每一首触动心弦的歌曲，珍藏每一段难忘的旋律</div>
                 </div>
             </div>`;
         }
@@ -3889,11 +3915,9 @@ function renderSkeletonNewHome() {
             .then(d => { _collectionTree = d.collections || []; })
             .catch(() => {});
 
-        // 初始渲染：推荐歌曲封面网格
+        // 初始渲染：首页（骨架屏 → 异步加载内容）
         window._currentSongs = songs;
-        $.viewContainer.innerHTML = renderCoverGrid(songs);
-        bindCardClicks();
-        setActiveSidebarNav('home');
+        navigateHome();
 
         // 初始化播放器
         Player.init();

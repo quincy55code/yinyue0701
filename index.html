@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎵 青春旋律 — 听歌笔记</title>
+    <title>🎵 听歌日记</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
     <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
-    <link rel="stylesheet" href="css/style.css?v=20260705b">
+    <link rel="stylesheet" href="css/style.css?v=20260705">
     <!-- CDN: marked.js + DOMPurify (defer 不阻塞渲染) -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js" defer></script>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎵</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 36 36%22><rect width=%2236%22 height=%2236%22 rx=%228%22 fill=%22%234DB88D%22/><path d=%22M11 26V14l8-1v9.5%22 stroke=%22%230B0E0C%22 stroke-width=%222.5%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22 fill=%22none%22/><circle cx=%229%22 cy=%2224%22 r=%222.5%22 fill=%22%230B0E0C%22/><circle cx=%2218%22 cy=%2221.5%22 r=%222.5%22 fill=%22%230B0E0C%22/></svg>">
 </head>
 <body>
 
@@ -22,19 +22,27 @@
         <!-- ====== 侧边栏 ====== -->
         <nav class="sidebar" id="sidebar">
             <div class="sidebar-brand">
-                <svg class="sidebar-logo-svg" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <rect width="36" height="36" rx="10" fill="url(#logoGrad)"/>
-                    <path d="M13 24V14l9-1.3v8" stroke="#0B0E0C" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-                    <circle cx="11.5" cy="22.5" r="2.2" fill="#0B0E0C"/>
-                    <circle cx="20.5" cy="19" r="2.2" fill="#0B0E0C"/>
+                <svg class="sidebar-logo-svg" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <defs>
-                        <linearGradient id="logoGrad" x1="0" y1="0" x2="36" y2="36">
+                        <linearGradient id="logoGrad" x1="0" y1="0" x2="40" y2="40">
                             <stop offset="0%" stop-color="#4DB88D"/>
                             <stop offset="100%" stop-color="#319F6A"/>
                         </linearGradient>
                     </defs>
+                    <!-- 背景圆角方块 -->
+                    <rect width="40" height="40" rx="10" fill="url(#logoGrad)"/>
+                    <!-- 左：书页/日记本的三条横线 -->
+                    <line x1="8" y1="14" x2="18" y2="14" stroke="#0B0E0C" stroke-width="2" stroke-linecap="round"/>
+                    <line x1="8" y1="20" x2="18" y2="20" stroke="#0B0E0C" stroke-width="2" stroke-linecap="round"/>
+                    <line x1="8" y1="26" x2="18" y2="26" stroke="#0B0E0C" stroke-width="2" stroke-linecap="round"/>
+                    <!-- 书脊竖线（分隔左右） -->
+                    <line x1="20" y1="10" x2="20" y2="32" stroke="#0B0E0C" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+                    <!-- 右：音符 -->
+                    <path d="M25 28V16l8-1.2v10" stroke="#0B0E0C" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                    <circle cx="24.5" cy="27.5" r="2.2" fill="#0B0E0C"/>
+                    <circle cx="32.5" cy="24.5" r="2.2" fill="#0B0E0C"/>
                 </svg>
-                <span class="sidebar-title">青春旋律</span>
+                <span class="sidebar-title">听歌日记</span>
             </div>
 
             <div class="sidebar-nav" id="sidebarNav">
@@ -139,7 +147,7 @@
                     <button class="btn-back" id="btnBack" data-action="nav-back">← 返回</button>
                     <span class="view-title" id="viewTitle"></span>
                 </div>
-                <div class="section-header" id="sectionHeader">🎵 音乐分类</div>
+                <div class="section-header" id="sectionHeader" style="display:none"></div>
                 <div class="view-container" id="viewContainer">
                     <!-- 动态渲染：标签卡片网格 / 歌曲封面网格 / 歌曲列表 / 收藏 / 歌单 -->
                 </div>
@@ -275,9 +283,16 @@
         // 启动应用
         (async function bootstrap() {
             try {
-                const songsResp = await fetch('/api/songs?bvid=BV1pr6aYiE97&limit=300');
+                // 并行请求歌曲列表 + 首页聚合数据
+                // 首页数据预取后挂到 window._prefetchedHomeData，renderNewHome() 优先复用，省一次往返
+                const songsPromise = fetch('/api/songs?bvid=BV1pr6aYiE97&limit=300');
+                const homePromise = fetch('/api/home').then(r => r.ok ? r.json() : null).catch(() => null);
+                homePromise.then(d => { if (d) window._prefetchedHomeData = d; });
+
+                const songsResp = await songsPromise;
                 if (!songsResp.ok) throw new Error('无法获取歌曲列表');
                 const songs = await songsResp.json();
+                window._bootstrapHomePromise = homePromise;
                 UI.init(songs);
             } catch (err) {
                 console.error('启动失败:', err);
