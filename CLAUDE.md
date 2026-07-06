@@ -136,12 +136,12 @@ Embedded lyrics panel ← Player.on() timeupdate/loading events ← Main window 
 Five JS files loaded in order in `index.html`: `js/auth.js` → `js/playlist.js` → `js/player.js` → `js/ui.js`. Each returns a singleton. `index.html` bootstraps by fetching `/api/songs` + `/api/tags` in parallel, then calling `UI.init(songs, tags)`.
 
 **HTML layout** — CSS Grid `.app-layout` (sidebar 240px | content 1fr) + `.player-bar` (72px fixed bottom):
-- `nav.sidebar` — 240px frosted-glass sidebar with nav items, tag shortcuts, user area (auth avatar/button)
+- `nav.sidebar` — 240px frosted-glass sidebar with nav items, tag shortcuts, user area (auth avatar/button). **Mobile**: hidden behind full-screen drawer overlay (`.drawer-overlay` + `.drawer-sheet`), triggered by FAB button.
 - `header.top-bar` — 48px bar with centered search input (capsule-shaped, max 480px)
 - `main.content-area` — scrollable content area: song cover grids, tag grids, homepage sections, note detail
-- `footer.player-bar` — 72px frosted-glass: cover thumbnail (48px) | meta | controls + progress | volume
+- `footer.player-bar` — 72px frosted-glass: cover thumbnail (48px) | meta | controls + progress | volume. **Mobile (< 768px)**: shrinks to 52px, `.player-bar.expanded` reveals volume + lyrics toggle.
 - `.now-playing-overlay` — full-screen immersive view (280px cover art, blurred backdrop, large controls)
-- `.lyrics-panel` — `position: fixed` overlay (right side, 380px), slides in via `.open` class. Syncs via `Player.on()`. Must stay at `.app-layout` root — `position: fixed`, not inside `.content-wrapper`.
+- `.lyrics-panel` — `position: fixed` overlay (right side, 380px), slides in via `.open` class. Syncs via `Player.on()`. Must stay at `.app-layout` root — `position: fixed`, not inside `.content-wrapper`. **Mobile**: becomes full-screen bottom-sheet, slides up from bottom.
 - **Homepage sections**: `.home-hero` (300px Hero Banner with blur+gradient), `.notes-hscroll` (横滑 Bento cards), `.recommended-scroll` (recommended songs horizontal scroll), `.comment-feed-list` (recent comments)
 
 | Module | Responsibility |
@@ -149,7 +149,7 @@ Five JS files loaded in order in `index.html`: `js/auth.js` → `js/playlist.js`
 | `js/auth.js` | JWT-based auth (email verification code + password). Email-first flow: `checkEmail(email)` → decide password/register. Custom JWT signing local verify. Observer pattern via `onChange()`. Provides `getAuthHeaders()`. |
 | `js/playlist.js` | Favorites + playlist CRUD with **optimistic local cache**. `getFavorites()`/`getPlaylists()` are **synchronous** (return local cache). Mutation updates cache instantly + `notify()` → UI refresh, then sends network request asynchronously. On failure, rolls back by re-fetching. |
 | `js/player.js` | `<audio>` lifecycle, play/pause/seek/mode. `seek()` handles `startTime` offset for segmented songs. Fallback seek: fast-forward at 8x muted if Range unsupported. Pushes `time-update`/`song-change` to `music_player_lyrics` BroadcastChannel. **`playSongById()` does NOT exist here** — it's in `ui.js`. |
-| `js/ui.js` | All DOM rendering + event delegation. **Homepage** (2026-07-03): `renderNewHome()` with Hero Banner + recent notes hscroll + recommended songs + recent comments. Staggered entrance animations. **Comments**: `appendComments(noteId)`, `renderMarkdown()` supports `[song:ID]` embedding. **Navigation**: sidebar buttons (`data-nav`) switch views. **`playSongById(songId)`** — async wrapper that fetches song cache on miss. |
+| `js/ui.js` | All DOM rendering + event delegation. **Homepage**: `renderNewHome()` with Hero Banner + recent notes hscroll + recommended songs + recent comments. Staggered entrance animations. **Comments**: `appendComments(noteId)`, `renderMarkdown()` supports `[song:ID]` embedding. **Navigation**: `[data-action]` event delegation + `goBack()` state machine. **`playSongById(songId)`** — async wrapper that fetches song cache on miss. **Mobile** (2026-07-06): `toggle-sidebar` drawer, player bar expand, lyrics bottom-sheet, compact cover grid. |
 | `js/lyrics.js` | Runs in standalone `lyrics.html` popup only. Parses LRC (`parseLRC()`), binary search sync (`syncTime()`), two modes: vertical (scrollable 10 lines) and horizontal (2 centered lines). Draggable title bar. Communicates via BroadcastChannel. Embedded panel in `ui.js` has its own independent implementation (`parseLRCEmbedded()`) — they share NO code. |
 
 **Event flow for mutations (critical):**
@@ -228,6 +228,21 @@ Two Supabase clients:
 - Comment/song resolution in `/api/home` already batches via noteMap/userMap/songMap — follow this pattern
 - Don't add new N+1 queries where batch fetch ( `.in('id', ids)`) suffices
 - Avoid blocking the event loop in rate-limited endpoints (auth, stream)
+
+## Mobile Adaptation (2026-07-06)
+
+**Breakpoints**: Tablet (`≤1023px` → hamburger menu, FAB+drawer) | Mobile (`≤768px` → compact layout, all below).
+
+**Key mobile features** (all scoped to `@media (max-width: 767px)` in `css/style.css`):
+- **Sidebar drawer**: full-screen overlay + left-slide sheet, triggered by FAB button or hamburger menu. Sidebar content cloned from desktop sidebar. `toggleMobileDrawer()` / `openMobileDrawer()` / `closeMobileDrawer()` in `js/ui.js`.
+- **Player bar**: 52px collapsed, expands via `.expanded` class to show volume control + lyrics text button.
+- **Lyrics panel**: full-screen bottom-sheet instead of right-side fixed panel.
+- **Cover grid**: 2 columns, `aspect-ratio: 1` images, compact spacing.
+- **Control buttons**: smaller (24px-34px), FAB bottom offset 52px+.
+- **Search**: capsule narrows, clear button stays visible.
+- **iOS safe areas**: `env(safe-area-inset-bottom)` on `.player-bar` and `.drawer-sheet`.
+
+**Design docs**: [mobile plan](docs/superpowers/plans/2026-07-05-mobile-adaptation.md) | [mobile spec](docs/superpowers/specs/2026-07-05-mobile-adaptation-design.md)
 
 ## Adding a Song
 
@@ -320,12 +335,12 @@ python scripts/calibrate_lyrics.py --offset=100 --limit=500
 
 ## Production Deployment (阿里云 ECS)
 
-**Live site**: http://music258.com (ECS `i-bp18v2inztg7q1wuwgp9`, 公网 IP `121.41.45.199`, cn-hangzhou, Alibaba Cloud Linux 3.2104 LTS, 2核 2GiB).
+**Live site**: https://music258.com (HTTPS, ECS `i-bp18v2inztg7q1wuwgp9`, 公网 IP `121.41.45.199`, cn-hangzhou, Alibaba Cloud Linux 3.2104 LTS, 2核 2GiB).
 
 **Architecture**:
 ```
-浏览器 → http://music258.com (DNS A 记录 → 121.41.45.199)
-  → Nginx (监听 0.0.0.0:80)
+浏览器 → https://music258.com (DNS A 记录 → 121.41.45.199)
+  → Nginx (监听 0.0.0.0:80 + 0.0.0.0:443, HTTP→HTTPS 301)
      ├─ 静态文件直出 (root /opt/music258)
      └─ /api/* 反向代理 → http://127.0.0.1:8765
           → Node.js server.js (PM2 守护，开机自启)
@@ -351,7 +366,7 @@ python scripts/calibrate_lyrics.py --offset=100 --limit=500
 **ECS 上的关键坑**:
 41. **Node.js 20 + @supabase/realtime-js 必须显式传 `ws`**: server.js:42 处 `createClient()` 必须传 `{ realtime: { transport: ws } }`，否则启动时崩溃报 "Node.js 20 detected without native WebSocket support"。`ws` 包已加入 [package.json](package.json)。
 42. **RunCommand 命令长度限制 ~12KB**: 超长命令（如大文件 base64）必须分块上传，每块 ≤12000 字符 base64。`uploadFile()` 已实现该逻辑。
-43. **RunCommand 复合命令容易 "Unknown: No message" 失败**: 把多步骤合并成一条 `&&` 长命令时高风险。改为分开调用 `RunCommand`（每条一个动作），失败率显著下降。
+43. **RunCommand 复合命令容易 "Unknown: No message" 失败**: 把多步骤合并成一条 `&&` 长命令时高风险。改为分开调用 `RunCommand`（每条一个动作），失败率显著下降。PM2 启动阶段尤其容易命中（2026-07-06 验证），建议在 `stage_app()` 失败时改用 SSH 直连执行 `pm2 start ecosystem.config.js`。
 44. **PM2 启动后需 `pm2 save` + `systemctl enable nginx`** 才能开机自启。
 45. **ECS 安全组必须放行 80/443**: 在阿里云控制台 → ECS → 安全组 → 入方向规则。
 46. **DNS A 记录** (`@` 和 `www` → `121.41.45.199`) 在阿里云域名解析控制台手动添加。
