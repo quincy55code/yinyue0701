@@ -616,10 +616,10 @@ const UI = (() => {
         } else if (_currentView === 'note') {
             // 从文章详情返回列表
             if (_currentNoteId) {
+                _currentView = 'notes';
                 if (window._currentUserIsAdmin) {
                     renderNotesListAdmin();
                 } else {
-                    _currentView = 'notes';
                     navigateToNotes();
                 }
                 _currentNoteId = null;
@@ -2963,6 +2963,14 @@ function renderSkeletonNewHome() {
             }
             if (action === 'nav-back') {
                 goBack();
+                return;
+            }
+
+            // === 手机侧边抽屉（兜底：直接监听器若不生效，事件委托代替） ===
+            if (action === 'toggle-sidebar') {
+                if ($.mobileDrawerOverlay) {
+                    toggleMobileDrawer();
+                }
                 return;
             }
 

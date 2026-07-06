@@ -453,6 +453,8 @@ body {
     color: var(--accent);
     opacity: 0.8;
 }
+
+.search-clear {
     position: absolute;
     right: 6px;
     top: 50%;
@@ -2816,7 +2818,7 @@ body {
 /* ============================================
    TABLET DRAWER — 平板底部抽屉
    ============================================ */
-.fab-drawer-trigger { display: none; }
+.fab-drawer-trigger { display: none !important; }
 .drawer-overlay { display: none; }
 .drawer-sheet { display: none; }
 
@@ -3035,12 +3037,19 @@ body {
 
     .cover-grid {
         grid-template-columns: repeat(2, 1fr);
-        gap: var(--space-md);
+        gap: var(--space-sm);
+    }
+
+    .cover-card {
+        padding: var(--space-sm) var(--space-sm) var(--space-md);
+        content-visibility: visible;
+        contain-intrinsic-size: auto;
     }
 
     .cover-card-img-wrap {
-        width: 100px;
-        height: 100px;
+        width: 100%;
+        height: auto;
+        aspect-ratio: 1;
     }
 
     .cover-card-title {
@@ -3077,15 +3086,15 @@ body {
     }
 
     .btn-ctrl.play-btn {
-        width: 38px;
-        height: 38px;
-        font-size: 18px;
+        width: 34px;
+        height: 34px;
+        font-size: 16px;
     }
 
     .btn-ctrl {
-        width: 28px;
-        height: 28px;
-        font-size: 16px;
+        width: 24px;
+        height: 24px;
+        font-size: 14px;
     }
 
     .player-controls {
@@ -3102,6 +3111,13 @@ body {
     .player-progress .progress-time {
         font-size: 10px;
         width: 28px;
+    }
+
+    /* 歌词文字按钮在手机版缩小 */
+    .btn-lyrics-text {
+        padding: 0 8px;
+        font-size: 11px;
+        letter-spacing: 0.5px;
     }
 
     /* 展开播放栏 — 显示音量 */
@@ -3122,15 +3138,6 @@ body {
 
     .top-bar-spacer {
         display: none;
-    }
-
-    /* 封面网格更紧凑 */
-    .cover-grid {
-        gap: var(--space-sm);
-    }
-
-    .cover-card {
-        padding: var(--space-sm) var(--space-sm) var(--space-md);
     }
 
     /* FAB */
@@ -4785,6 +4792,8 @@ body {
 
     .cover-card {
         padding: var(--space-sm) var(--space-sm) var(--space-md);
+        content-visibility: visible;
+        contain-intrinsic-size: auto;
     }
 
     .cover-card-img-wrap {
